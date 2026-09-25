@@ -1,6 +1,6 @@
 ﻿# R1 EDA  (polars 1.44.2)
 
-## train: rows, countries, missingness per source  (RSS 0.92 GiB)
+## train: rows, countries, missingness per source  (RSS 1.41 GiB, previous section 3.7s)
 
 | source | country | rows    | name_missing | addr_missing |
 | ---    | ---     | ---     | ---          | ---          |
@@ -21,7 +21,7 @@
 | S2     | 5034616 |
 | S3     | 5285603 |
 
-## Ground truth integrity  (RSS 0.70 GiB)
+## Ground truth integrity  (RSS 0.68 GiB, previous section 0.4s)
 
 GT rows: 2,206,821   unique S1 in GT: 2,206,821   duplicate S1 rows: 0
 S1 in source1 but not in GT: 0
@@ -31,7 +31,7 @@ Matched IDs without S2-/S3- prefix: 0
 Matched IDs absent from train S2/S3 files: 0
 Positive pairs: 7,638,365
 
-## Match cardinality per S1 entity  (RSS 1.76 GiB)
+## Match cardinality per S1 entity  (RSS 2.45 GiB, previous section 4.8s)
 
 | bucket | n_s1   | share  |
 | ---    | ---    | ---    |
@@ -49,7 +49,7 @@ Singleton rate (= macro F0.5 of all-empty prediction): 0.0558
 Mean matches per S1: 3.461 (all S1), 3.666 (non-singletons)
 Median / p95 / max matches among non-singletons: 4 / 6 / 11
 
-## S2 vs S3 contribution  (RSS 2.08 GiB)
+## S2 vs S3 contribution  (RSS 2.40 GiB, previous section 0.9s)
 
 Matches from S2: 3,693,619   from S3: 3,944,746
 | combo   | n_s1    | share  |
@@ -73,12 +73,12 @@ Matches per non-singleton S1, by source (k = count from that source):
 | 5   | 24154  | 35378  |
 | 6   | 0      | 2816   |
 
-## One-owner check: does any S2/S3 ID appear under more than one S1?  (RSS 2.18 GiB)
+## One-owner check: does any S2/S3 ID appear under more than one S1?  (RSS 2.41 GiB, previous section 0.1s)
 
 Distinct matched S2/S3 IDs: 7,638,365
 IDs claimed by >1 S1: 0   max owners: 1
 
-## S2/S3 records that match no S1 (distractors)  (RSS 3.20 GiB)
+## S2/S3 records that match no S1 (distractors)  (RSS 3.08 GiB, previous section 0.6s)
 
 | source | match_country | rows    | unmatched_share |
 | ---    | ---           | ---     | ---             |
@@ -91,7 +91,7 @@ IDs claimed by >1 S1: 0   max owners: 1
 
 Overall unmatched share: 0.2599
 
-## Country agreement between S1 and its matches  (RSS 0.72 GiB)
+## Country agreement between S1 and its matches  (RSS 2.20 GiB, previous section 9.4s)
 
 | country | match_country | pairs   |
 | ---     | ---           | ---     |
@@ -102,21 +102,19 @@ Overall unmatched share: 0.2599
 
 Pairs with differing country: 0 of 7,638,365
 
-## Per-country breakdown of S1 cardinality  (RSS 1.84 GiB)
+## Per-country breakdown of S1 cardinality  (RSS 3.48 GiB, previous section 1.8s)
 
-| country | n_s1    | singleton_ | share_1 | ... | share_3plu | mean_match | mean_nons | s2_share_ |
-| ---     | ---     | rate       | ---     |     | s          | es         | ingleton  | of_matche |
-| str     | u32     | ---        | f64     |     | ---        | ---        | ---       | s         |
-|         |         | f64        |         |     | f64        | f64        | f64       | ---       |
-|         |         |            |         |     |            |            |           | f64       |
-|---------|---------|------------|---------|-----|------------|------------|-----------|-----------|
-| India   | 883188  | 0.0559     | 0.0537  | ... | 0.7206     | 3.4645     | 3.6696    | 0.4839    |
-| US      | 1323633 | 0.0558     | 0.0542  | ... | 0.7198     | 3.4591     | 3.6636    | 0.4834    |
+| country | n_s1    | singleton_rate | share_1 | share_2 | share_3plus | mean_matches | mean_nonsingleton | s2_share_of_matches |
+| ---     | ---     | ---            | ---     | ---     | ---         | ---          | ---               | ---                 |
+| str     | u32     | f64            | f64     | f64     | f64         | f64          | f64               | f64                 |
+|---------|---------|----------------|---------|---------|-------------|--------------|-------------------|---------------------|
+| India   | 883188  | 0.0559         | 0.0537  | 0.1698  | 0.7206      | 3.4645       | 3.6696            | 0.4839              |
+| US      | 1323633 | 0.0558         | 0.0542  | 0.1702  | 0.7198      | 3.4591       | 3.6636            | 0.4834              |
 
-## Train freed  (RSS 1.52 GiB)
+## Train freed  (RSS 3.53 GiB, previous section 0.1s)
 
 
-## test: rows, countries, missingness per source  (RSS 1.17 GiB)
+## test: rows, countries, missingness per source  (RSS 1.27 GiB, previous section 3.9s)
 
 | source | country | rows    | name_missing | addr_missing |
 | ---    | ---     | ---     | ---          | ---          |
@@ -140,11 +138,26 @@ Pairs with differing country: 0 of 7,638,365
 | S2     | 4887273 |
 | S3     | 5082316 |
 
-## Train / test size ratio  (RSS 1.12 GiB)
+## Train / test size ratio  (RSS 0.79 GiB, previous section 0.2s)
 
 S1: train 2,206,821  test 1,732,544  test/train 0.785
 S2: train 5,034,616  test 4,887,273  test/train 0.971
 S3: train 5,285,603  test 5,082,316  test/train 0.962
 
-## Done  (RSS 0.78 GiB)
+## Done  (RSS 0.79 GiB, previous section 0.0s)
 
+
+## Profiling (2026-09-25)
+
+I/O per step, summed over all 7 files (`notebooks/profile_io.py`, warm OS file cache):
+
+| step | seconds |
+|---|---|
+| raw line count (2.4 GB) | 3.9 |
+| TSV parse, slim columns | 4.7 |
+| parquet cache build (one-off, 973 MB zstd) | 11.6 |
+| parquet parse, slim columns | 2.8 |
+
+A full EDA run on the parquet cache takes 27 s wall-clock. The slowest section is country agreement (about 10 s: a join of 7.6M pairs against 10.3M S2/S3 IDs). Peak RSS is about 3.5 GiB. RSS stays high after train is freed because the allocator keeps the memory rather than returning it.
+
+The first run took more than 10 minutes, so its time was not in the script's compute. That command also ran `pip install psutil`, and the TSVs were read cold for the first time (possibly with antivirus scanning). I have not confirmed the cause with a cold re-run.

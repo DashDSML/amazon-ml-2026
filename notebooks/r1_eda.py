@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import gc
 import sys
+import time
 from pathlib import Path
 
 import polars as pl
@@ -17,12 +18,9 @@ import psutil
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "code" / "business_entity_resolution" / "src"))
 from data import (  # noqa: E402
-    count_data_lines,
-    ground_truth_path,
     load_ground_truth_pairs,
     scan_ground_truth,
     scan_source,
-    source_path,
 )
 
 pl.Config.set_tbl_rows(40)
@@ -40,8 +38,13 @@ def rss() -> str:
     return f"{PROC.memory_info().rss / 2**30:.2f} GiB"
 
 
+_T = [time.perf_counter()]
+
+
 def h(title: str) -> None:
-    print(f"\n## {title}  (RSS {rss()})\n")
+    now = time.perf_counter()
+    print(f"\n## {title}  (RSS {rss()}, previous section {now - _T[0]:.1f}s)\n", flush=True)
+    _T[0] = now
 
 
 def slim_source(split: str, source: int) -> pl.DataFrame:
@@ -56,8 +59,7 @@ def slim_source(split: str, source: int) -> pl.DataFrame:
         )
         .collect()
     )
-    raw = count_data_lines(source_path(split, source))
-    assert df.height == raw, f"{split} S{source}: parsed {df.height} rows but file has {raw} lines"
+    # Row count vs raw line count is verified once when the parquet cache is built.
     prefix_ok = df["entity_id"].str.starts_with(f"S{source}-").all()
     assert prefix_ok, f"{split} S{source}: entity_id prefix mismatch"
     assert df["entity_id"].n_unique() == df.height, f"{split} S{source}: duplicate entity_id"
@@ -95,7 +97,6 @@ def train_eda() -> dict[str, int]:
     # ---- ground-truth integrity -------------------------------------------
     h("Ground truth integrity")
     gt_raw = scan_ground_truth().collect()
-    assert gt_raw.height == count_data_lines(ground_truth_path())
     n_dup_s1_rows = gt_raw.height - gt_raw[S1].n_unique()
     gt = load_ground_truth_pairs()
     raw_ids = gt_raw["matched_entity_ids"].str.split(",").list.eval(pl.element().filter(pl.element() != ""))

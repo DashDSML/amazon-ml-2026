@@ -4,6 +4,11 @@ Every file is read with tab separators, all columns as strings, empty cells kept
 as "" (never null), and quoting disabled so stray quote characters inside names
 or addresses cannot swallow tabs/newlines. The header is asserted on load.
 
+Each TSV is converted once to parquet under ``dataset/cache/<split>/`` (row count
+verified against the raw line count) and later scans read the parquet. The cache
+is rebuilt automatically when missing or older than its TSV. Build everything
+up front with ``python data.py --build-cache``.
+
 Uses polars (Arrow-backed strings) so full files never become pandas object
 columns. Prefer the lazy ``scan_*`` functions plus ``.select(...)`` when only a
 few columns are needed; never hold train and test in memory at the same time.
@@ -50,11 +55,51 @@ def _check_columns(names: list[str], expected: list[str], path: Path) -> None:
     assert names == expected, f"{path}: expected columns {expected}, got {names}"
 
 
-def _scan(path: Path, expected: list[str]) -> pl.LazyFrame:
+def cache_path(tsv_path: Path) -> Path:
+    """dataset/<split>/<name>.tsv -> dataset/cache/<split>/<name>.parquet"""
+    tsv_path = Path(tsv_path)
+    return tsv_path.parents[1] / "cache" / tsv_path.parent.name / f"{tsv_path.stem}.parquet"
+
+
+def _scan_tsv(path: Path, expected: list[str]) -> pl.LazyFrame:
     lf = pl.scan_csv(path, **_CSV_KWARGS)
     _check_columns(lf.collect_schema().names(), expected, path)
     # Any NULL here would mean a short/ragged row slipped through.
     return lf.with_columns(pl.all().fill_null(""))
+
+
+def build_cache(tsv_path: Path, expected: list[str], force: bool = False) -> Path:
+    """Stream one TSV to parquet (memory-bounded) and verify its row count."""
+    out = cache_path(tsv_path)
+    if not force and out.exists() and out.stat().st_mtime >= Path(tsv_path).stat().st_mtime:
+        return out
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out.with_suffix(".parquet.tmp")
+    _scan_tsv(tsv_path, expected).sink_parquet(tmp, compression="zstd", row_group_size=250_000)
+    n_parquet = pl.scan_parquet(tmp).select(pl.len()).collect().item()
+    n_raw = count_data_lines(tsv_path)
+    if n_parquet != n_raw:
+        tmp.unlink()
+        raise AssertionError(f"{tsv_path}: parsed {n_parquet} rows but file has {n_raw} lines")
+    tmp.replace(out)
+    return out
+
+
+def _scan(path: Path, expected: list[str], use_cache: bool = True) -> pl.LazyFrame:
+    """Scan a dataset TSV through its parquet cache (built on first use)."""
+    if not use_cache:
+        return _scan_tsv(path, expected)
+    cached = build_cache(path, expected)
+    lf = pl.scan_parquet(cached)
+    _check_columns(lf.collect_schema().names(), expected, cached)
+    return lf
+
+
+def build_all_caches(dataset_dir: Path = DATASET_DIR, force: bool = False) -> None:
+    for split in ("train", "test"):
+        for source in (1, 2, 3):
+            build_cache(source_path(split, source, dataset_dir), SOURCE_COLUMNS, force)
+    build_cache(ground_truth_path(dataset_dir), GT_COLUMNS, force)
 
 
 def scan_source(split: Split, source: Source, dataset_dir: Path = DATASET_DIR) -> pl.LazyFrame:
@@ -110,3 +155,17 @@ def count_data_lines(path: Path, chunk_size: int = 1 << 24) -> int:
     if last != b"\n":
         n += 1  # final line without trailing newline
     return n - 1
+
+
+if __name__ == "__main__":
+    import argparse
+    import time
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--build-cache", action="store_true")
+    ap.add_argument("--force", action="store_true")
+    args = ap.parse_args()
+    if args.build_cache:
+        t = time.perf_counter()
+        build_all_caches(force=args.force)
+        print(f"parquet cache ready in {time.perf_counter() - t:.1f}s")

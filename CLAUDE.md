@@ -33,6 +33,21 @@ Read these before doing anything:
 - Tag every leaderboard submission `lb-<n>` (max 5 per day).
 - Fixed random seeds. Single entry point: `python code/business_entity_resolution/src/run_pipeline.py --stage {all,blocking,train,predict}`.
 
+## Key data facts (R1 EDA)
+Full output: `experiments/r1_eda_output.md` (script `notebooks/r1_eda.py`).
+- Singleton rate is 5.6%, so predicting all lists empty scores only 0.056. Missing matches matters much more than the generic advice suggests.
+- Mean 3.46 true matches per S1 (3.67 among non-singletons, max 11). This is the list size a perfect blocker would output.
+- One-owner holds exactly: each S2/S3 record matches at most one S1 (0 violations in 7.64M positive pairs).
+- Country never differs within a match (0 of 7.64M pairs), so country is a hard blocking key.
+- About 26% of S2/S3 records are distractors (match no S1).
+- About 3% of S2/S3 addresses are missing. S1 has no missing names or addresses.
+- US and India statistics are nearly identical (singleton rate, cardinality, S2/S3 split), which points to one synthetic generator.
+- Test has about 23% more S2/S3 records per S1 than train (5.75 vs 4.68). 15% of test S1 is France.
+
+Design direction:
+- Block from the S2/S3 side: each S2/S3 record goes only to its top-m S1 entities within its own country (one-owner cap, T30). This bounds total candidates by m × |S2 ∪ S3|.
+- Use score-based and relative cutoffs per S1 (score floor, α × best, largest gap; T31), not a fixed top-K.
+
 ## Data scale
 - The dataset is about 2.5 GB (each Source 2/3 file is about 500 MB) and the dev laptop has 16 GB RAM.
 - Load with polars or pyarrow. Do not use pandas object (Python string) columns for full files. Convert only small slices to pandas.
