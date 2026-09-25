@@ -1,0 +1,8 @@
+# data and generated files
+dataset/
+output/
+*.tsv
+.DS_Store
+__pycache__/
+.venv/
+models/
