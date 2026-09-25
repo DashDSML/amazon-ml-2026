@@ -33,5 +33,12 @@ Read these before doing anything:
 - Tag every leaderboard submission `lb-<n>` (max 5 per day).
 - Fixed random seeds. Single entry point: `python code/business_entity_resolution/src/run_pipeline.py --stage {all,blocking,train,predict}`.
 
+## Data scale
+- The dataset is about 2.5 GB (each Source 2/3 file is about 500 MB) and the dev laptop has 16 GB RAM.
+- Load with polars or pyarrow. Do not use pandas object (Python string) columns for full files. Convert only small slices to pandas.
+- Never load train and test at the same time. Finish with one split and free it before loading the other.
+- Every step must stay within a fixed memory budget: process in chunks (S1 batches, streaming or lazy scans, chunked sparse top-K), select only the columns you need, and don't materialise large Python lists or dicts of strings.
+
 ## Environment
 - Windows, PowerShell. Use `python` (not `python3`), `pathlib` for all paths, and keep the code OS-independent so it also runs on Linux/EC2.
+- Python 3.12 in `.venv`, created with `py -3.12 -m venv .venv`. Activate with `.venv\Scripts\Activate.ps1` (Windows) or `source .venv/bin/activate` (Linux).
