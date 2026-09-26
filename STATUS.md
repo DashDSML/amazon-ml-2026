@@ -1,14 +1,10 @@
-# Status (2026-09-26, commit 410f375)
+# Status (2026-09-26, commit 62d6e57)
 
 Done:
-- Fixed broken `merge_letter_runs` import in `mine_resources.py` (renamed to `merge_letters_expr`).
-- Fixed name-prefix mining rule (s1_start_rate check) instead of patching "kim"; verified fix on real S1 record.
-- Added `snap_to_s1_form()` + hard-fail invariant check for `states.csv` canonicals; no violations found. `cities.csv` has no variant→canonical column, so it doesn't apply there.
-- Re-ran `mine_resources.py`; committed all resource/code changes.
-- Moved hand-written findings from `noise_analysis.md` to `noise_findings.md`.
+- Blocking v1 (S2/S3-side, one-owner top-m) built and tuned. Train: oracle F0.5 0.9778, pair recall 0.9384, 5.82 cands/S1 (floor 0.5, alpha 0.9, m 3). Test: 7.85 cands/S1, 13.6M pairs.
+- `make_submission.py`: tunes an entity-level decision rule on train candidates only (rank==0 & score>=t1, sweep t1 0.5-0.95; also tried rank<=1 with a stricter t2, which did not improve). Best: rank==0, t1=0.950, real macro F0.5=0.8388 (US 0.8745, India 0.7852, singleton 0.8583, non-singleton 0.8376, fold range 0.8382-0.8394).
+- Applied to test, wrote `output/matching_results.tsv` + `output/candidate_pairs.tsv` (1,732,544 S1 rows each), passed `validate_submission.py` (PASS).
 
-Left (not done this session, per user's stop request):
-- ~8 unit tests (Indic script, legal suffixes, state forms, house numbers) — not written.
-- Before/after char-trigram TF-IDF "true S1 at rank 1" comparison on a 100k-row sample — not run.
+Note (not acted on, flagged only): the t1 sweep kept improving up to the 0.95 boundary — a higher t1 may score even better; out of scope for this task's fixed grid.
 
-Next: run the full-data normalisation command below, then unit tests + TF-IDF check.
+Next: decide whether to extend the t1 sweep past 0.95, then consider LB submission (`lb-1`).
