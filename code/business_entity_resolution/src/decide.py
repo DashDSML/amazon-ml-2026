@@ -7,11 +7,17 @@ metric) on the fold-4 holdout, scored against the model.py CV booster
 (``lgbm_cv.txt``, trained on folds 0-3 only, so fold 4 is a genuine holdout).
 Nothing here touches test (G1).
 
-Reports overall / per country / singleton vs non-singleton at the chosen t,
-alongside the blocking oracle ceiling for context (see ORACLE_F05).
+Reports overall / per country / singleton vs non-singleton at the chosen t, alongside
+the blocking oracle ceiling for context -- computed directly from the fold-4 holdout's
+own candidates (prediction = candidates included, if any true match got in), not a
+hardcoded number, so it is always the right ceiling for whichever --version is active.
+
+--version {v1,v2} (default v1) selects which blocking's features.parquet (and which
+model_dir()) to use; v1 is unchanged unless requested.
 
     python decide.py --smoke 20000   # dev sample
     python decide.py                 # full train (run yourself; slow)
+    python decide.py --version v2
 """
 
 from __future__ import annotations
@@ -27,9 +33,8 @@ import cv_harness as ev
 import evaluate as official
 from data import load_ground_truth_pairs
 from features import FEATURE_COLS
-from model import MODEL_DIR, add_fold, load_features
+from model import add_fold, load_features, model_dir
 
-ORACLE_F05 = 0.9778  # blocking v1 full-train grid (floor=0.5 alpha=0.9 m=3), experiments/log.csv
 HOLDOUT_FOLD = 4
 T_GRID = [round(0.05 * i, 3) for i in range(1, 20)]  # 0.05 .. 0.95
 
@@ -56,16 +61,25 @@ def top1_per_record(df: pl.DataFrame, prob: np.ndarray) -> pl.DataFrame:
     return d
 
 
-def predictions_at(top1: pl.DataFrame, t: float, s1_ids: pl.DataFrame, q_ids: dict[int, pl.DataFrame]) -> pl.DataFrame:
-    accepted = top1.filter(pl.col("prob") >= t)
+def _map_to_ids(rows: pl.DataFrame, s1_ids: pl.DataFrame, q_ids: dict[int, pl.DataFrame]) -> pl.DataFrame:
+    """(src, qi, s1, ...) rows -> long (source1_entity_id, match_id)."""
     parts = []
     for src in (2, 3):
-        part = accepted.filter(pl.col("src") == src).join(q_ids[src], on="qi", how="left")
+        part = rows.filter(pl.col("src") == src).join(q_ids[src], on="qi", how="left")
         parts.append(part.select("s1", pl.col("entity_id").alias("match_id")))
     long = pl.concat(parts)
     return long.join(
         s1_ids.select("s1", pl.col("entity_id").alias("source1_entity_id")), on="s1", how="left"
     ).select("source1_entity_id", "match_id")
+
+
+def predictions_at(top1: pl.DataFrame, t: float, s1_ids: pl.DataFrame, q_ids: dict[int, pl.DataFrame]) -> pl.DataFrame:
+    return _map_to_ids(top1.filter(pl.col("prob") >= t), s1_ids, q_ids)
+
+
+def oracle_predictions(ho: pl.DataFrame, s1_ids: pl.DataFrame, q_ids: dict[int, pl.DataFrame]) -> pl.DataFrame:
+    """Best any matcher could do on this candidate set: predict every true candidate present."""
+    return _map_to_ids(ho.filter(pl.col("is_true")), s1_ids, q_ids)
 
 
 def tune_threshold(top1, s1_ids, q_ids, truth, universe) -> tuple[float, float]:
@@ -79,10 +93,10 @@ def tune_threshold(top1, s1_ids, q_ids, truth, universe) -> tuple[float, float]:
     return best_t, best_f05
 
 
-def main(smoke: int | None = None) -> None:
-    df = add_fold(load_features(smoke))
+def main(smoke: int | None = None, version: str = "v1") -> None:
+    df = add_fold(load_features(smoke, version))
     ho = df.filter(pl.col("fold") == HOLDOUT_FOLD)
-    booster = lgb.Booster(model_file=str(MODEL_DIR / "lgbm_cv.txt"))
+    booster = lgb.Booster(model_file=str(model_dir(version) / "lgbm_cv.txt"))
     prob = booster.predict(ho.select(FEATURE_COLS).to_numpy())
 
     s1_ids, q_ids = id_maps("train")
@@ -90,31 +104,39 @@ def main(smoke: int | None = None) -> None:
     universe = ho.select("s1").unique().join(s1_ids, on="s1")["entity_id"]
     top1 = top1_per_record(ho, prob)
 
+    oracle_f05 = official.macro_f05(truth, oracle_predictions(ho, s1_ids, q_ids), universe)
+    print(f"[decide] version={version}  fold-{HOLDOUT_FOLD} holdout blocking oracle ceiling={oracle_f05:.4f}")
+
     print(f"=== sweep: accept record's top-probability candidate iff prob>=t (fold {HOLDOUT_FOLD} holdout) ===")
     best_t, best_f05 = tune_threshold(top1, s1_ids, q_ids, truth, universe)
-    print(f"-> best t={best_t:.2f}  f05={best_f05:.4f}  (blocking oracle ceiling={ORACLE_F05:.4f})")
+    print(f"-> best t={best_t:.2f}  f05={best_f05:.4f}  (blocking oracle ceiling={oracle_f05:.4f})")
 
     pred = predictions_at(top1, best_t, s1_ids, q_ids)
     scores = official.per_entity_scores(truth, pred, universe)
     s1_country = s1_ids.select(pl.col("entity_id").alias("source1_entity_id"), "country")
     report = official.score_report(scores, s1_country)
     print(f"\n--- report at t={best_t:.2f} ---")
-    print(f"overall f05={report['overall']:.4f}  blocking oracle ceiling={ORACLE_F05:.4f}")
+    print(f"overall f05={report['overall']:.4f}  blocking oracle ceiling={oracle_f05:.4f}")
     print("by country:")
     print(report["by_country"])
     print("singleton vs non-singleton:")
     print(report["by_bucket"])
 
-    (MODEL_DIR / "decision.json").write_text(json.dumps(
-        {"t": best_t, "f05": best_f05, "holdout_fold": HOLDOUT_FOLD, "ceiling": ORACLE_F05}, indent=2
+    md = model_dir(version)
+    (md / "decision.json").write_text(json.dumps(
+        {"t": best_t, "f05": best_f05, "holdout_fold": HOLDOUT_FOLD, "ceiling": oracle_f05, "version": version},
+        indent=2,
     ))
-    print(f"\nsaved decision threshold -> {MODEL_DIR / 'decision.json'}")
+    print(f"\nsaved decision threshold -> {md / 'decision.json'}")
 
-    ev.log_experiment(f"decide.py t={best_t:.2f}", {"f05": report["overall"], "ceiling": ORACLE_F05})
+    ev.log_experiment(
+        f"decide.py version={version} t={best_t:.2f}", {"f05": report["overall"], "ceiling": oracle_f05}
+    )
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", type=int, default=None, help="must match the sample used for model.py --smoke")
+    ap.add_argument("--version", choices=["v1", "v2"], default="v1")
     args = ap.parse_args()
-    main(args.smoke)
+    main(args.smoke, args.version)

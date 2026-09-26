@@ -1,5 +1,7 @@
 """Pairwise features for the LightGBM matcher (CLAUDE.md D3), one row per candidate
-pair from blocking v1's ``candidates.parquet`` (src, qi, s1, score, name_s, addr_s, rank).
+pair from blocking's ``candidates.parquet`` (src, qi, s1, score, name_s, addr_s, rank).
+--version {v1,v2} (default v1) selects dataset/cache/blocking_{version}/ for both input
+(candidates.parquet) and output (features.parquet); v1 is unchanged unless requested.
 
 Every input is a column normalize.py already produced (name_core, name_compact,
 name_tokens, name_legal, name_alias, addr_house_no, addr_city, addr_state,
@@ -29,6 +31,7 @@ peak memory stays bounded on the full 12.8M-pair train set.
     python features.py --split train --smoke 20000   # dev sample
     python features.py --split train                 # full (run yourself; slow)
     python features.py --split test
+    python features.py --split train --version v2     # v2 candidates
 """
 
 from __future__ import annotations
@@ -149,9 +152,9 @@ def _fuzzy_features(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def build_features(split: str, smoke: int | None = None) -> Path:
+def build_features(split: str, smoke: int | None = None, version: str = "v1") -> Path:
     t0 = time.perf_counter()
-    cands = pl.read_parquet(out_dir(split, None) / "candidates.parquet")
+    cands = pl.read_parquet(out_dir(split, None, version) / "candidates.parquet")
     if smoke:
         rng = np.random.default_rng(SEED)
         uniq_s1 = cands["s1"].unique().to_numpy()
@@ -218,11 +221,11 @@ def build_features(split: str, smoke: int | None = None) -> Path:
         pl.col(c).cast(pl.Float32) for c in FEATURE_COLS if cands.schema[c] != pl.Float32
     ).select(out_cols)
 
-    od = out_dir(split, smoke)
+    od = out_dir(split, smoke, version)
     od.mkdir(parents=True, exist_ok=True)
     out_path = od / "features.parquet"
     cands.write_parquet(out_path)
-    print(f"[features] {split} smoke={smoke}: {cands.height:,} rows, {len(FEATURE_COLS)} features "
+    print(f"[features] {split} version={version} smoke={smoke}: {cands.height:,} rows, {len(FEATURE_COLS)} features "
           f"-> {out_path.relative_to(DATASET_DIR.parent)} ({time.perf_counter() - t0:.0f}s)")
     return out_path
 
@@ -230,7 +233,8 @@ def build_features(split: str, smoke: int | None = None) -> Path:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--split", choices=["train", "test"], required=True)
+    ap.add_argument("--version", choices=["v1", "v2"], default="v1")
     ap.add_argument("--smoke", type=int, default=None, help="train only: sample this many S1")
     args = ap.parse_args()
     assert not (args.smoke and args.split == "test"), "--smoke is train-only"
-    build_features(args.split, args.smoke)
+    build_features(args.split, args.smoke, args.version)

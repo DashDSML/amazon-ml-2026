@@ -15,6 +15,7 @@ early-stopping round count.
 
     python model.py --smoke 20000     # dev sample
     python model.py                   # full train (run yourself; slow, ~12.8M rows)
+    python model.py --version v2      # v2 features, saved to dataset/cache/blocking_v2/model/
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from __future__ import annotations
 import argparse
 import json
 import time
+from pathlib import Path
 
 import lightgbm as lgb
 import numpy as np
@@ -45,14 +47,17 @@ PARAMS = dict(
 MAX_ROUNDS = 2000
 EARLY_STOP = 50
 HOLDOUT_FOLD = 4
-MODEL_DIR = DATASET_DIR / "cache" / "blocking_v1" / "model"
 
 
-def load_features(smoke: int | None = None) -> pl.DataFrame:
-    path = out_dir("train", smoke) / "features.parquet"
+def model_dir(version: str = "v1") -> Path:
+    return DATASET_DIR / "cache" / f"blocking_{version}" / "model"
+
+
+def load_features(smoke: int | None = None, version: str = "v1") -> pl.DataFrame:
+    path = out_dir("train", smoke, version) / "features.parquet"
     if not path.exists():
-        build_features("train", smoke)
-        path = out_dir("train", smoke) / "features.parquet"
+        build_features("train", smoke, version)
+        path = out_dir("train", smoke, version) / "features.parquet"
     return pl.read_parquet(path)
 
 
@@ -68,9 +73,9 @@ def to_xy(df: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
     return X, y
 
 
-def train(smoke: int | None = None, note: str = "") -> None:
+def train(smoke: int | None = None, note: str = "", version: str = "v1") -> None:
     t0 = time.perf_counter()
-    df = add_fold(load_features(smoke))
+    df = add_fold(load_features(smoke, version))
     assert df["fold"].null_count() == 0, "every candidate's s1 must have a fold"
 
     tr = df.filter(pl.col("fold") != HOLDOUT_FOLD)
@@ -100,20 +105,21 @@ def train(smoke: int | None = None, note: str = "") -> None:
     for name, val in imp[:15]:
         print(f"  {name:<22} {val:,.0f}")
 
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
-    cv_booster.save_model(str(MODEL_DIR / "lgbm_cv.txt"))
-    full_booster.save_model(str(MODEL_DIR / "lgbm_full.txt"))
-    (MODEL_DIR / "meta.json").write_text(json.dumps(
+    md = model_dir(version)
+    md.mkdir(parents=True, exist_ok=True)
+    cv_booster.save_model(str(md / "lgbm_cv.txt"))
+    full_booster.save_model(str(md / "lgbm_full.txt"))
+    (md / "meta.json").write_text(json.dumps(
         {"feature_cols": FEATURE_COLS, "best_iteration": best_iter, "seed": SEED,
-         "params": PARAMS, "holdout_fold": HOLDOUT_FOLD},
+         "params": PARAMS, "holdout_fold": HOLDOUT_FOLD, "version": version},
         indent=2,
     ))
     print(f"[model] saved cv/full boosters + meta.json -> "
-          f"{MODEL_DIR.relative_to(DATASET_DIR.parent)} ({time.perf_counter() - t0:.0f}s)")
+          f"{md.relative_to(DATASET_DIR.parent)} ({time.perf_counter() - t0:.0f}s)")
 
     ev.log_experiment(
-        note or f"lightgbm matcher num_leaves={PARAMS['num_leaves']} lr={PARAMS['learning_rate']} "
-                f"best_iter={best_iter}",
+        note or f"lightgbm matcher version={version} num_leaves={PARAMS['num_leaves']} "
+                f"lr={PARAMS['learning_rate']} best_iter={best_iter}",
         {"best_iteration": best_iter},
     )
 
@@ -121,6 +127,7 @@ def train(smoke: int | None = None, note: str = "") -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", type=int, default=None, help="train only: sample this many S1 (via features.py)")
+    ap.add_argument("--version", choices=["v1", "v2"], default="v1")
     ap.add_argument("--note", default="")
     args = ap.parse_args()
-    train(args.smoke, args.note)
+    train(args.smoke, args.note, args.version)

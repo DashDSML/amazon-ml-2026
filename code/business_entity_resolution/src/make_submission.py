@@ -1,8 +1,10 @@
 """Decide the entity-level matches and write the submission (CLAUDE.md D6).
 
-Candidates come from blocking v1 (dataset/cache/blocking_v1/{split}/candidates.parquet,
+Candidates come from blocking (dataset/cache/blocking_{version}/{split}/candidates.parquet,
 columns src, qi, s1, score, name_s, addr_s, rank -- already the final candidate set, one
-row per (S2/S3 record, its rank-th best S1) up to m=3).
+row per (S2/S3 record, its rank-th best S1) up to m=3). --version {v1,v2} (default v1)
+selects which blocking's candidates/features/model to use; v1 is unchanged unless
+requested (lb-2 depends on it staying that way).
 
 Two decision methods, chosen with --method:
 
@@ -12,16 +14,17 @@ Two decision methods, chosen with --method:
 
   model: use the LightGBM matcher (model.py) -- each record's highest-probability
     candidate, accepted iff probability >= the threshold decide.py tuned on the fold-4
-    holdout (dataset/cache/blocking_v1/model/decision.json). Requires test features
-    already built (python features.py --split test) and the model already trained
-    (python model.py).
+    holdout (dataset/cache/blocking_{version}/model/decision.json). Requires test features
+    already built (python features.py --split test --version {version}) and the model
+    already trained (python model.py --version {version}).
 
 Either way: candidate_pairs.tsv is always the full test candidate set (unfiltered), the
 decision is written to matching_results.tsv, matches are checked with
 validate_submission.py, and the run is logged.
 
-    python make_submission.py                  # rule (tunes on train, ~1-2 min)
-    python make_submission.py --method model    # model (needs features/model built first)
+    python make_submission.py                              # v1 rule (tunes on train, ~1-2 min)
+    python make_submission.py --method model                # v1 model (needs features/model built first)
+    python make_submission.py --version v2 --method model   # v2 model
 """
 
 from __future__ import annotations
@@ -40,14 +43,14 @@ import cv_harness as ev
 import decide
 from blocking import make_ctx, out_dir
 from data import DATASET_DIR, REPO_ROOT
-from model import MODEL_DIR
+from model import model_dir
 
 T_GRID = [round(0.5 + 0.025 * i, 3) for i in range(19)]  # 0.500 .. 0.950
 OUT_DIR = REPO_ROOT / "output"
 
 
-def load_candidates(split: str) -> pl.DataFrame:
-    return pl.read_parquet(out_dir(split, None) / "candidates.parquet")
+def load_candidates(split: str, version: str = "v1") -> pl.DataFrame:
+    return pl.read_parquet(out_dir(split, None, version) / "candidates.parquet")
 
 
 # ---------------------------------------------------------------- method: rule
@@ -89,14 +92,14 @@ def report(name: str, res: dict, ctx: ev.EvalCtx) -> None:
         print(line)
 
 
-def apply_rule(cands_test: pl.DataFrame) -> pl.DataFrame:
+def apply_rule(cands_test: pl.DataFrame, version: str = "v1") -> pl.DataFrame:
     """Tune the rank/score rule on TRAIN, then apply the chosen rule to TEST candidates."""
     truth = ev.load_truth_idx()
-    cands_train = load_candidates("train")
+    cands_train = load_candidates("train", version)
     df = cands_train.join(
         truth.with_columns(pl.lit(True).alias("is_true")), on=["src", "qi", "s1"], how="left"
     ).with_columns(pl.col("is_true").fill_null(False))
-    ctx = make_ctx("train", out_dir("train", None), truth)
+    ctx = make_ctx("train", out_dir("train", None, version), truth)
     s1 = df["s1"].to_numpy().astype(np.int64)
     rank = df["rank"].to_numpy()
     score = df["score"].to_numpy()
@@ -120,7 +123,7 @@ def apply_rule(cands_test: pl.DataFrame) -> pl.DataFrame:
         print(f"\nchosen: rank==0 (t1={t1_best:.3f}); rank<=1 did not improve ({f05_b:.4f} <= {f05_a:.4f})")
 
     ev.log_experiment(
-        f"make_submission rule={rule[0]} t1={rule[1]:.3f} t2={rule[2]}",
+        f"make_submission version={version} rule={rule[0]} t1={rule[1]:.3f} t2={rule[2]}",
         {"f05": res["f05"], "pair_recall": res["pair_recall"], "cands_mean": res["mean"]},
     )
 
@@ -133,17 +136,18 @@ def apply_rule(cands_test: pl.DataFrame) -> pl.DataFrame:
 
 
 # ---------------------------------------------------------------- method: model
-def apply_model(cands_test: pl.DataFrame) -> pl.DataFrame:
+def apply_model(cands_test: pl.DataFrame, version: str = "v1") -> pl.DataFrame:
     """LightGBM matcher (model.py) + decide.py's tuned one-owner threshold, applied to TEST."""
-    feat_path = out_dir("test", None) / "features.parquet"
-    assert feat_path.exists(), f"missing {feat_path}; run: python features.py --split test"
-    meta = json.loads((MODEL_DIR / "meta.json").read_text())
-    decision_path = MODEL_DIR / "decision.json"
-    assert decision_path.exists(), f"missing {decision_path}; run: python decide.py"
+    feat_path = out_dir("test", None, version) / "features.parquet"
+    assert feat_path.exists(), f"missing {feat_path}; run: python features.py --split test --version {version}"
+    md = model_dir(version)
+    meta = json.loads((md / "meta.json").read_text())
+    decision_path = md / "decision.json"
+    assert decision_path.exists(), f"missing {decision_path}; run: python decide.py --version {version}"
     decision = json.loads(decision_path.read_text())
 
     feat = pl.read_parquet(feat_path)
-    booster = lgb.Booster(model_file=str(MODEL_DIR / "lgbm_full.txt"))
+    booster = lgb.Booster(model_file=str(md / "lgbm_full.txt"))
     prob = booster.predict(feat.select(meta["feature_cols"]).to_numpy())
     top1 = decide.top1_per_record(feat, prob)
     accepted = top1.filter(pl.col("prob") >= decision["t"]).select("src", "qi", "s1")
@@ -189,14 +193,16 @@ def write_tsv(df: pl.DataFrame, path: Path) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--method", choices=["rule", "model"], default="rule")
+    ap.add_argument("--version", choices=["v1", "v2"], default="v1")
     args = ap.parse_args()
 
-    cands_test = load_candidates("test")
+    cands_test = load_candidates("test", args.version)
     if args.method == "model":
-        pred_test = apply_model(cands_test)
+        pred_test = apply_model(cands_test, args.version)
     else:
-        pred_test = apply_rule(cands_test)
-    print(f"\ntest: {cands_test.height:,} candidate pairs -> {pred_test.height:,} matched pairs")
+        pred_test = apply_rule(cands_test, args.version)
+    print(f"\ntest: version={args.version} {cands_test.height:,} candidate pairs -> "
+          f"{pred_test.height:,} matched pairs")
 
     matching = build_id_lists(pred_test, "test", "matched_entity_ids")
     candidates_out = build_id_lists(cands_test, "test", "candidate_entity_ids")
