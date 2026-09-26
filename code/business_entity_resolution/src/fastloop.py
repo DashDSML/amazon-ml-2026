@@ -8,6 +8,10 @@ per S1 are unbiased estimates of the full run. Recall and oracle are exact for t
 sampled S1. Uses blocking.py's own key/retrieve/score/keep_top, so any v2 change to
 blocking.py is measured here unchanged. ~5 min per run instead of ~1.7 h.
 
+--version v1 (default) or v2 (BLOCKING_V2.md fixes) is passed straight through to
+blocking.retrieve(); it only changes the ranking/cap inside retrieve(), so the rest of
+this loop (scoring, pruning, bucketing) is identical between versions.
+
 Every true pair of a sampled S1 that is missing from the final candidate set gets
 exactly one bucket:
   A1 block>cap      shared a key with its S1, but every shared block exceeded the cap
@@ -21,6 +25,7 @@ exactly one bucket:
 
     python fastloop.py --note "v1 baseline"
     python fastloop.py --floor 0.5 --alpha 0.9 --m 2 --note "v1 m=2"
+    python fastloop.py --version v2 --note "v2 fix A3"
 """
 
 from __future__ import annotations
@@ -120,7 +125,7 @@ def diagnose_unretrieved(miss: np.ndarray, q: pl.DataFrame, s1: pl.DataFrame, s1
     return buckets, examples
 
 
-def main(floor: float, alpha: float, m: int, note: str) -> None:
+def main(floor: float, alpha: float, m: int, note: str, version: str = "v1") -> None:
     t0 = time.perf_counter()
     split = "train"
     countries = sorted(set().union(*[
@@ -159,7 +164,7 @@ def main(floor: float, alpha: float, m: int, note: str) -> None:
         for off in range(0, q.height, bk.Q_CHUNK):
             chunk = q.slice(off, bk.Q_CHUNK)
             q_cc = chunk.select(cc_expr).to_series().to_numpy()
-            cand, uq = bk.retrieve(chunk, keys, s1i, s1_cc, q_cc)
+            cand, uq = bk.retrieve(chunk, keys, s1i, s1_cc, q_cc, version=version)
             ret_true.append(uq[np.isin(uq, tcodes)])
             if cand.height:
                 pc = bk._codes(cand)
@@ -246,7 +251,7 @@ def main(floor: float, alpha: float, m: int, note: str) -> None:
             cell_bucket(bname, None if c == "Overall" else countries.index(c), mm) for c, mm in cols
         ]))
     width = max(len(r[0]) for r in rows)
-    print(f"[fast] floor={floor} alpha={alpha} m={m}  eval S1={N_S1:,}  queries={n_queries:,}")
+    print(f"[fast] version={version}  floor={floor} alpha={alpha} m={m}  eval S1={N_S1:,}  queries={n_queries:,}")
     print("  " + " " * width + "".join(f"{c:>22}" for c, _ in cols))
     for name, vals in rows:
         print(f"  {name:<{width}}" + "".join(f"{v:>22}" for v in vals))
@@ -256,7 +261,7 @@ def main(floor: float, alpha: float, m: int, note: str) -> None:
         print("\n".join(examples))
 
     ev.log_experiment(
-        f"fastloop {note or 'unnamed'} (floor={floor} alpha={alpha} m={m})",
+        f"fastloop {version} {note or 'unnamed'} (floor={floor} alpha={alpha} m={m})",
         {"oracle_f05": float(f[mask].mean()), "pair_recall": float(tp[mask].sum() / ntrue[mask].sum()),
          "cands_mean": stats[0]["mean"], "cands_p95": stats[0]["p95"]},
     )
@@ -267,6 +272,7 @@ if __name__ == "__main__":
     ap.add_argument("--floor", type=float, default=0.5)
     ap.add_argument("--alpha", type=float, default=0.9)
     ap.add_argument("--m", type=int, default=3)
+    ap.add_argument("--version", choices=["v1", "v2"], default="v1")
     ap.add_argument("--note", default="")
     a = ap.parse_args()
-    main(a.floor, a.alpha, a.m, a.note)
+    main(a.floor, a.alpha, a.m, a.note, a.version)

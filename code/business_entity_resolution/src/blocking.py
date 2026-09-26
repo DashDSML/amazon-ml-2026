@@ -1,4 +1,9 @@
-"""Blocking v1: S2/S3-side retrieval of S1 candidates within country, adaptive top-m.
+"""Blocking: S2/S3-side retrieval of S1 candidates within country, adaptive top-m.
+
+--version v1 (default) is the original pipeline and reproduces it exactly. --version v2
+switches on BLOCKING_V2.md's fixes (see KIND_MULT/PRE_CAP_V2 and retrieve()'s v2 branch
+for fix A/A3); it writes to a separate dataset/cache/blocking_v2/ tree and never changes
+v1's code path or output. fastloop.py takes the same --version.
 
 Stage 1, retrieve + score (per S2/S3 chunk, memory-bounded):
   1. Every record gets blocking keys, each prefixed with its country so a key can only
@@ -10,7 +15,8 @@ Stage 1, retrieve + score (per S2/S3 chunk, memory-bounded):
      is non-empty and <= `cap`, then stop adding keys once PAIR_BUDGET postings are used.
      Selectivity is the posting length in the index being queried: an index property at
      query time, nothing is fitted (no IDF/vocabulary is learned from test).
-  4. Candidates are ranked by number of shared keys; top PRE_CAP per record are scored
+  4. Candidates are ranked (v1: by raw shared-key count; v2: by summed rarity-weighted
+     shared keys, fix A3) and the top PRE_CAP (v1) / PRE_CAP_V2 (v2) per record are scored
      with rapidfuzz (name token_set/ratio, address token_set, house-number agreement).
   5. Top SAVE_CAP per record are saved with score, rank and the record's best score.
 
@@ -20,12 +26,13 @@ Stage 2, adaptive top-m (one-owner cap, T30/T31): a query record keeps candidate
          then writes candidates for the chosen setting and logs it (full runs only).
   test:  applies the chosen setting and prints candidate-size stats.
 
-Outputs: dataset/cache/blocking_v1/<split>[/smoke]/{parts/, candidates.parquet}
+Outputs: dataset/cache/blocking_{v1,v2}/<split>[/smoke]/{parts/, candidates.parquet}
 candidates.parquet columns: src (2|3), qi (row in norm_source{src}), s1 (row in
 norm_source1), score, name_s, addr_s, rank.
 
-  python blocking.py --split train --smoke 20000   # quick check on a sample
-  python blocking.py --split train                 # full run + grid
+  python blocking.py --split train --smoke 20000              # quick check on a sample
+  python blocking.py --split train                            # full run + grid (v1)
+  python blocking.py --split train --version v2 --smoke 20000  # v2, quick check
   python blocking.py --split train --prune-only --floor 0.5 --alpha 0.9 --m 3
   python blocking.py --split test  --floor 0.5 --alpha 0.9 --m 3
 """
@@ -54,7 +61,15 @@ KINDS = {0: ("C", 1, 2000), 1: ("T", 2, 500), 2: ("G", 3, 500), 3: ("H", 2, 200)
 QUOTA = np.array([KINDS[k][1] for k in sorted(KINDS)], dtype=np.int64)
 CAP = np.array([KINDS[k][2] for k in sorted(KINDS)], dtype=np.int64)
 PAIR_BUDGET = 2000  # max postings expanded per query record
-PRE_CAP = 30  # candidates per record sent to the scorer
+PRE_CAP = 30  # v1: candidates per record sent to the scorer, ranked by raw shared-key count
+# v2 fix A (BLOCKING_V2 #4, bucket A3 "hits-cap"): rank by sum of rarity-weighted shared
+# keys instead of raw count, and give the wider ranking more room before the scorer cap.
+# KIND_MULT is a fixed constant per key kind (C,T,G,H,Y,A order), reasoned from how specific
+# each kind is (exact-name / name+house-number are highly specific; name+city and
+# house+addr-token are moderately specific; a lone name token or a 4-gram are generic) and
+# validated by the train-only fastloop (G1: no test row informs this weight or PRE_CAP_V2).
+KIND_MULT = np.array([3.0, 1.0, 1.0, 3.0, 2.0, 2.0])
+PRE_CAP_V2 = 80
 SAVE_CAP = 5  # candidates per record kept for stage 2 (max usable m)
 Q_CHUNK = 25_000
 S1_CHUNK = 200_000
@@ -83,8 +98,8 @@ STR_COLS = ["entity_id", "country", "name_core", "name_compact", "addr_nolm", "a
 LIST_COLS = ["name_tokens", "addr_tokens"]
 
 
-def out_dir(split: str, smoke: int | None) -> Path:
-    d = DATASET_DIR / "cache" / "blocking_v1" / split
+def out_dir(split: str, smoke: int | None, version: str = "v1") -> Path:
+    d = DATASET_DIR / "cache" / f"blocking_{version}" / split
     return d / "smoke" if smoke else d
 
 
@@ -158,8 +173,18 @@ def build_index(s1: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
 
 
 # ---------------------------------------------------------------- retrieval
-def retrieve(chunk: pl.DataFrame, keys: np.ndarray, s1i: np.ndarray, s1_cc: np.ndarray, q_cc: np.ndarray):
-    """Candidate (qi, s1, hits) for one query chunk, top PRE_CAP by hits per qi."""
+def retrieve(
+    chunk: pl.DataFrame, keys: np.ndarray, s1i: np.ndarray, s1_cc: np.ndarray, q_cc: np.ndarray,
+    version: str = "v1",
+):
+    """Candidate (qi, s1, hits) for one query chunk.
+
+    v1: top PRE_CAP per qi by raw shared-key count (hits).
+    v2 (fix A3): top PRE_CAP_V2 per qi by the *sum of rarity-weighted* shared keys --
+    weight = KIND_MULT[kind] / log2(block_size + 1), block_size read from the index being
+    queried at query time (G1-allowed; see BLOCKING_V2 #4, bucket A3). Both versions share
+    the identical key-selection (quota/budget) stage; only the final ranking/cap differs.
+    """
     kf = key_frame(chunk)
     qi, kind, k = kf["i"].to_numpy(), kf["kind"].to_numpy(), kf["k"].to_numpy()
     lo = np.searchsorted(keys, k, "left")
@@ -172,7 +197,7 @@ def retrieve(chunk: pl.DataFrame, keys: np.ndarray, s1i: np.ndarray, s1_cc: np.n
         .sort(["qi", "post", "lo"])
         .filter((pl.col("post").cum_sum().over("qi") - pl.col("post")) < PAIR_BUDGET)
     )
-    qs, ps, ls = sel["qi"].to_numpy(), sel["post"].to_numpy(), sel["lo"].to_numpy()
+    qs, ps, ls, ks = sel["qi"].to_numpy(), sel["post"].to_numpy(), sel["lo"].to_numpy(), sel["kind"].to_numpy()
     total = int(ps.sum())
     if total == 0:
         empty = pl.DataFrame(schema={"qi": pl.UInt32, "s1": pl.UInt32, "hits": pl.UInt16})
@@ -182,6 +207,28 @@ def retrieve(chunk: pl.DataFrame, keys: np.ndarray, s1i: np.ndarray, s1_cc: np.n
     s1 = s1i[pos]
     same = s1_cc[s1] == q_cc[np.searchsorted(chunk["i"].to_numpy(), rep_q)]  # hash-collision guard
     code = (rep_q[same].astype(np.uint64) << np.uint64(32)) | s1[same].astype(np.uint64)
+
+    if version == "v2":
+        rep_post = np.repeat(ps, ps)[same]
+        rep_kind = np.repeat(ks, ps)[same]
+        w = KIND_MULT[rep_kind] / np.log2(rep_post.astype(np.float64) + 1.0)
+        del rep_q, pos, s1, same, rep_post, rep_kind
+        uq, inv = np.unique(code, return_inverse=True)
+        wsum = np.bincount(inv, weights=w, minlength=len(uq))
+        hits = np.bincount(inv, minlength=len(uq)).astype(np.uint16)
+        cand = (
+            pl.DataFrame({
+                "qi": (uq >> np.uint64(32)).astype(np.uint32),
+                "s1": (uq & np.uint64(0xFFFFFFFF)).astype(np.uint32),
+                "hits": hits,
+                "weight": wsum.astype(np.float32),
+            })
+            .sort(["qi", "weight", "s1"], descending=[False, True, False])
+            .filter(pl.int_range(pl.len()).over("qi") < PRE_CAP_V2)
+            .select("qi", "s1", "hits")
+        )
+        return cand, uq
+
     del rep_q, pos, s1, same
     uq, hits = np.unique(code, return_counts=True)
     cand = (
@@ -246,7 +293,7 @@ def _codes(df: pl.DataFrame) -> np.ndarray:
 
 
 # ---------------------------------------------------------------- stage 1
-def run_retrieval(split: str, smoke: int | None, od: Path) -> None:
+def run_retrieval(split: str, smoke: int | None, od: Path, version: str = "v1") -> None:
     t0 = time.perf_counter()
     countries = sorted(
         set().union(*[
@@ -298,7 +345,7 @@ def run_retrieval(split: str, smoke: int | None, od: Path) -> None:
         for n_chunk, off in enumerate(range(0, q.height, Q_CHUNK)):
             chunk = q.slice(off, Q_CHUNK)
             q_cc = chunk.select(cc_expr).to_series().to_numpy()
-            cand, uq = retrieve(chunk, keys, s1i, s1_cc, q_cc)
+            cand, uq = retrieve(chunk, keys, s1i, s1_cc, q_cc, version=version)
             top = keep_top(score(cand, chunk, s1, s1_pos), src) if cand.height else None
             tot["q"] += chunk.height
             tot["q_nocand"] += chunk.height - cand["qi"].n_unique()
@@ -364,7 +411,10 @@ def _fmt(res: dict) -> str:
     return s
 
 
-def run_prune(split: str, smoke: int | None, od: Path, floor: float, alpha: float, m: int, note: str) -> None:
+def run_prune(
+    split: str, smoke: int | None, od: Path, floor: float, alpha: float, m: int, note: str,
+    version: str = "v1",
+) -> None:
     assert m <= SAVE_CAP, f"m must be <= SAVE_CAP={SAVE_CAP}"
     df = load_scored(od)
     truth = None
@@ -397,7 +447,7 @@ def run_prune(split: str, smoke: int | None, od: Path, floor: float, alpha: floa
 
     if split == "train" and not smoke:
         ev.log_experiment(
-            note or f"blocking_v1 floor={floor} alpha={alpha} m={m}",
+            note or f"blocking_{version} floor={floor} alpha={alpha} m={m}",
             {"oracle_f05": res["f05"], "pair_recall": res["pair_recall"], "cands_mean": res["mean"],
              "cands_median": res["median"], "cands_p95": res["p95"]},
         )
@@ -406,6 +456,9 @@ def run_prune(split: str, smoke: int | None, od: Path, floor: float, alpha: floa
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--split", choices=["train", "test"], required=True)
+    ap.add_argument("--version", choices=["v1", "v2"], default="v1",
+                     help="v1 (default) reproduces the original pipeline exactly; "
+                          "v2 writes to dataset/cache/blocking_v2/ (BLOCKING_V2.md)")
     ap.add_argument("--smoke", type=int, default=None, help="train only: sample this many S1")
     ap.add_argument("--prune-only", action="store_true", help="skip stage 1, reuse saved parts")
     ap.add_argument("--floor", type=float, default=0.5)
@@ -414,7 +467,7 @@ if __name__ == "__main__":
     ap.add_argument("--note", default="")
     a = ap.parse_args()
     assert not (a.smoke and a.split == "test"), "--smoke is train-only"
-    od = out_dir(a.split, a.smoke)
+    od = out_dir(a.split, a.smoke, a.version)
     if not a.prune_only:
-        run_retrieval(a.split, a.smoke, od)
-    run_prune(a.split, a.smoke, od, a.floor, a.alpha, a.m, a.note)
+        run_retrieval(a.split, a.smoke, od, version=a.version)
+    run_prune(a.split, a.smoke, od, a.floor, a.alpha, a.m, a.note, version=a.version)
