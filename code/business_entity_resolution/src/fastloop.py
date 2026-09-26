@@ -26,6 +26,7 @@ exactly one bucket:
     python fastloop.py --note "v1 baseline"
     python fastloop.py --floor 0.5 --alpha 0.9 --m 2 --note "v1 m=2"
     python fastloop.py --version v2 --note "v2 fix A3"
+    python fastloop.py --version v2 --grid --note "v2 with size/oracle trade-off table"
 """
 
 from __future__ import annotations
@@ -83,7 +84,8 @@ def content_bucket(q: dict, s: dict, gq: bool, gs: bool) -> str:
 
 
 def diagnose_unretrieved(miss: np.ndarray, q: pl.DataFrame, s1: pl.DataFrame, s1_pos: np.ndarray,
-                         keys: np.ndarray, gib_q: np.ndarray, gib_s1: np.ndarray) -> tuple[list[str], list[str]]:
+                         keys: np.ndarray, gib_q: np.ndarray, gib_s1: np.ndarray,
+                         version: str = "v1") -> tuple[list[str], list[str]]:
     """Bucket for each never-retrieved true pair (codes qi<<32|s1). Returns (buckets, G examples)."""
     if len(miss) == 0:
         return [], []
@@ -91,8 +93,8 @@ def diagnose_unretrieved(miss: np.ndarray, q: pl.DataFrame, s1: pl.DataFrame, s1
     si = (miss & np.uint64(0xFFFFFFFF)).astype(np.uint32)
     qsub = q[np.searchsorted(q["i"].to_numpy(), qi)]
     ssub = s1[s1_pos[si]]
-    kq = bk.key_frame(qsub).rename({"i": "qi"})
-    ks = bk.key_frame(ssub).rename({"i": "s1"})
+    kq = bk.key_frame(qsub, version=version).rename({"i": "qi"})
+    ks = bk.key_frame(ssub, version=version).rename({"i": "s1"})
     shared = (
         pl.DataFrame({"qi": qi, "s1": si})
         .join(kq, on="qi")
@@ -125,7 +127,7 @@ def diagnose_unretrieved(miss: np.ndarray, q: pl.DataFrame, s1: pl.DataFrame, s1
     return buckets, examples
 
 
-def main(floor: float, alpha: float, m: int, note: str, version: str = "v1") -> None:
+def main(floor: float, alpha: float, m: int, note: str, version: str = "v1", grid: bool = False) -> None:
     t0 = time.perf_counter()
     split = "train"
     countries = sorted(set().union(*[
@@ -143,7 +145,7 @@ def main(floor: float, alpha: float, m: int, note: str, version: str = "v1") -> 
 
     s1_cc = s1.select(cc_expr).to_series().to_numpy()
     s1_pos = np.arange(n_s1, dtype=np.int64)
-    keys, s1i = bk.build_index(s1)
+    keys, s1i = bk.build_index(s1, version=version)
     gib_s1 = _bool_col(split, 1, "name_is_gibberish")
     print(f"[fast] index S1={n_s1:,} keys={len(keys):,} {time.perf_counter() - t0:.0f}s", flush=True)
 
@@ -176,7 +178,7 @@ def main(floor: float, alpha: float, m: int, note: str, version: str = "v1") -> 
         ret = np.concatenate(ret_true) if ret_true else np.empty(0, np.uint64)
         stage["ret"].append((src, ret))
         miss = np.setdiff1d(tcodes, ret)
-        b, ex = diagnose_unretrieved(miss, q, s1, s1_pos, keys, gib_q, gib_s1)
+        b, ex = diagnose_unretrieved(miss, q, s1, s1_pos, keys, gib_q, gib_s1, version=version)
         bucket_rows.append(pl.DataFrame({
             "src": np.full(len(miss), src, np.uint8),
             "code": miss, "bucket": pl.Series(b, dtype=pl.String),
@@ -260,6 +262,27 @@ def main(floor: float, alpha: float, m: int, note: str, version: str = "v1") -> 
         print(f"[fast] G examples (q name | S1 name | q addr | S1 addr):")
         print("\n".join(examples))
 
+    if grid:
+        print(f"\n[fast] floor/alpha/m grid (candidate size counts toward the final ranking, G2):")
+        print(f"  {'floor':>6} {'alpha':>6} {'m':>3}   {'oracleF05':>9}   {'cands/S1 mean':>13}")
+        for fl, al, mm in bk.GRID:
+            keep_g = bk.keep_mask(df, fl, al, mm)
+            kept_g = df.filter(pl.Series(keep_g))
+            s1g = kept_g["s1"].to_numpy().astype(np.int64)
+            qg, srcg = kept_g["qi"].to_numpy(), kept_g["src"].to_numpy()
+            is_true_g = np.zeros(len(s1g), bool)
+            wg = np.full(len(s1g), 1.0 / RATE)
+            kc_g = bk._codes(kept_g)
+            for src in (2, 3):
+                m_ = srcg == src
+                is_true_g[m_] = np.isin(kc_g[m_], tset[src])
+                wg[m_ & np.isin(qg, own_sets[src])] = 1.0
+            tp_g = np.bincount(s1g, weights=is_true_g.astype(np.float64), minlength=n_s1)
+            npred_g = np.bincount(s1g, weights=wg, minlength=n_s1)
+            f_g = ev.per_s1_f05(tp_g, tp_g, ntrue)
+            cs = ev.candidate_stats(npred_g, mask)
+            print(f"  {fl:>6} {al:>6} {mm:>3}   {f_g[mask].mean():>9.4f}   {cs['mean']:>13.2f}")
+
     ev.log_experiment(
         f"fastloop {version} {note or 'unnamed'} (floor={floor} alpha={alpha} m={m})",
         {"oracle_f05": float(f[mask].mean()), "pair_recall": float(tp[mask].sum() / ntrue[mask].sum()),
@@ -273,6 +296,7 @@ if __name__ == "__main__":
     ap.add_argument("--alpha", type=float, default=0.9)
     ap.add_argument("--m", type=int, default=3)
     ap.add_argument("--version", choices=["v1", "v2"], default="v1")
+    ap.add_argument("--grid", action="store_true", help="also sweep bk.GRID: oracle vs mean cands/S1")
     ap.add_argument("--note", default="")
     a = ap.parse_args()
-    main(a.floor, a.alpha, a.m, a.note, a.version)
+    main(a.floor, a.alpha, a.m, a.note, a.version, a.grid)

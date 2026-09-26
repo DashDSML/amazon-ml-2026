@@ -9,7 +9,8 @@ Stage 1, retrieve + score (per S2/S3 chunk, memory-bounded):
   1. Every record gets blocking keys, each prefixed with its country so a key can only
      hit S1 records of the same country (country is a hard key; France needs no special
      case). Kinds:  C exact name_compact | T name token | G 4-gram of name_compact
-     (typo-robust) | H name token + house no | Y name token + city | A house no + addr token.
+     (typo-robust) | H name token + house no | Y name token + city | A house no + addr token
+     | (v2 only) P two rarest name tokens, unordered pair | N addr token + city, no house no.
   2. S1 keys are hashed into one sorted uint64 array (inverted index via searchsorted).
   3. Per query record, per kind, keep the `quota` most selective keys whose posting list
      is non-empty and <= `cap`, then stop adding keys once PAIR_BUDGET postings are used.
@@ -57,18 +58,26 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)  # polars 1.x exp
 
 SEED = 42
 # kind code -> (letter, quota per record, max posting length)
-KINDS = {0: ("C", 1, 2000), 1: ("T", 2, 500), 2: ("G", 3, 500), 3: ("H", 2, 200), 4: ("Y", 1, 200), 5: ("A", 2, 200)}
+# 6 "P" and 7 "N" are v2-only composite keys (fix A1/B, BLOCKING_V2 #4): key_frame() only
+# emits them when version=="v2", but CAP/QUOTA carry all 8 entries so indexing by kind
+# code works unchanged either way (v1 never produces a 6 or 7).
+KINDS = {
+    0: ("C", 1, 2000), 1: ("T", 2, 500), 2: ("G", 3, 500), 3: ("H", 2, 200), 4: ("Y", 1, 200), 5: ("A", 2, 200),
+    6: ("P", 1, 500),   # two rarest name tokens, unordered pair (fix A1: splits oversized T/G blocks)
+    7: ("N", 2, 200),   # addr token + city, no house number required (fix B: gibberish names)
+}
 QUOTA = np.array([KINDS[k][1] for k in sorted(KINDS)], dtype=np.int64)
 CAP = np.array([KINDS[k][2] for k in sorted(KINDS)], dtype=np.int64)
 PAIR_BUDGET = 2000  # max postings expanded per query record
 PRE_CAP = 30  # v1: candidates per record sent to the scorer, ranked by raw shared-key count
 # v2 fix A (BLOCKING_V2 #4, bucket A3 "hits-cap"): rank by sum of rarity-weighted shared
 # keys instead of raw count, and give the wider ranking more room before the scorer cap.
-# KIND_MULT is a fixed constant per key kind (C,T,G,H,Y,A order), reasoned from how specific
-# each kind is (exact-name / name+house-number are highly specific; name+city and
-# house+addr-token are moderately specific; a lone name token or a 4-gram are generic) and
-# validated by the train-only fastloop (G1: no test row informs this weight or PRE_CAP_V2).
-KIND_MULT = np.array([3.0, 1.0, 1.0, 3.0, 2.0, 2.0])
+# KIND_MULT is a fixed constant per key kind (C,T,G,H,Y,A,P,N order), reasoned from how
+# specific each kind is (exact-name / name+house-number / rare-token-pair are highly
+# specific; name+city and house+addr-token and addr-token+city are moderately specific; a
+# lone name token or a 4-gram are generic) and validated by the train-only fastloop (G1: no
+# test row informs this weight or PRE_CAP_V2).
+KIND_MULT = np.array([3.0, 1.0, 1.0, 3.0, 2.0, 2.0, 3.0, 2.0])
 PRE_CAP_V2 = 80
 SAVE_CAP = 5  # candidates per record kept for stage 2 (max usable m)
 Q_CHUNK = 25_000
@@ -126,8 +135,20 @@ def _k(letter: str, *parts: pl.Expr) -> pl.Expr:
     return pl.concat_str([pl.col("country"), pl.lit(f"\x1f{letter}\x1f"), *parts])
 
 
-def key_frame(df: pl.DataFrame) -> pl.DataFrame:
-    """(i u32, kind u8, k u64) for every blocking key of every record in df."""
+def key_frame(df: pl.DataFrame, version: str = "v1") -> pl.DataFrame:
+    """(i u32, kind u8, k u64) for every blocking key of every record in df.
+
+    v2 adds two composite keys (fix A1/B, BLOCKING_V2 #4), both computed purely from the
+    records in ``df`` (no fitted table, no test-derived state -- G1):
+      P  the record's two *rarest* name tokens (lowest document frequency within this same
+         batch of records) as an unordered pair. Splits the oversized single-token (T) and
+         4-gram (G) blocks that a common name word creates, without needing a train-fit IDF
+         table -- "rare" is a query-time property of the batch being indexed/queried, the
+         same allowance already used for KIND_MULT's block-size weighting.
+      N  an address token (street/locality-like, non-numeric) plus city, with NO house
+         number required -- unlike kind A. Purely address-based, so a record whose name is
+         scrambled or gibberish (bucket B) can still be retrieved by its address alone.
+    """
     base = df.select("i", "country", "name_compact", "name_tokens", "addr_house_no", "addr_city", "addr_tokens")
     kind = lambda c: pl.lit(c, dtype=pl.UInt8).alias("kind")  # noqa: E731
     parts = [base.filter(pl.col("name_compact") != "").select("i", kind(0), _k("C", pl.col("name_compact")).alias("s"))]
@@ -163,6 +184,30 @@ def key_frame(df: pl.DataFrame) -> pl.DataFrame:
     )
     parts.append(addr.select("i", kind(5), _k("A", pl.col("addr_house_no"), pl.lit("|"), pl.col("a")).alias("s")))
 
+    if version == "v2":
+        df_t = tok.group_by("t").len().rename({"len": "_df"})
+        rarest = (
+            tok.join(df_t, on="t")
+            .sort(["i", "_df", "t"])
+            .with_columns(_r=pl.int_range(pl.len()).over("i"))
+            .filter(pl.col("_r") < 2)
+        )
+        pair = (
+            rarest.group_by("i")
+            .agg(pl.col("t").sort().str.join("|").alias("_pair"), pl.len().alias("_n"))
+            .filter(pl.col("_n") == 2)
+            .join(base.select("i", "country"), on="i")
+        )
+        parts.append(pair.select("i", kind(6), _k("P", pl.col("_pair")).alias("s")))
+
+        addr_nh = (
+            base.filter(pl.col("addr_city") != "")
+            .select("i", "country", "addr_city", pl.col("addr_tokens").alias("a"))
+            .explode("a")
+            .filter((pl.col("a").str.len_chars() >= 3) & ~pl.col("a").str.contains(r"^\d+$"))
+        )
+        parts.append(addr_nh.select("i", kind(7), _k("N", pl.col("addr_city"), pl.lit("|"), pl.col("a")).alias("s")))
+
     return (
         pl.concat(parts)
         .select(pl.col("i").cast(pl.UInt32), "kind", pl.col("s").hash(seed=SEED).alias("k"))
@@ -170,10 +215,10 @@ def key_frame(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def build_index(s1: pl.DataFrame) -> tuple[np.ndarray, np.ndarray]:
+def build_index(s1: pl.DataFrame, version: str = "v1") -> tuple[np.ndarray, np.ndarray]:
     ks, ss = [], []
     for off in range(0, s1.height, S1_CHUNK):
-        kf = key_frame(s1.slice(off, S1_CHUNK))
+        kf = key_frame(s1.slice(off, S1_CHUNK), version=version)
         ks.append(kf["k"].to_numpy())
         ss.append(kf["i"].to_numpy())
     keys, s1i = np.concatenate(ks), np.concatenate(ss)
@@ -194,7 +239,7 @@ def retrieve(
     queried at query time (G1-allowed; see BLOCKING_V2 #4, bucket A3). Both versions share
     the identical key-selection (quota/budget) stage; only the final ranking/cap differs.
     """
-    kf = key_frame(chunk)
+    kf = key_frame(chunk, version=version)
     qi, kind, k = kf["i"].to_numpy(), kf["kind"].to_numpy(), kf["k"].to_numpy()
     lo = np.searchsorted(keys, k, "left")
     post = np.searchsorted(keys, k, "right") - lo
@@ -350,7 +395,7 @@ def run_retrieval(split: str, smoke: int | None, od: Path, version: str = "v1") 
     s1_cc[s1["i"].to_numpy()] = s1.select(cc_expr).to_series().to_numpy()
     s1_pos = np.full(n_s1_rows, -1, np.int64)
     s1_pos[s1["i"].to_numpy()] = np.arange(s1.height)
-    keys, s1i = build_index(s1)
+    keys, s1i = build_index(s1, version=version)
     print(f"[index] S1={s1.height:,} keys={len(keys):,} ({keys.nbytes / 2**20:.0f} MiB) {time.perf_counter() - t0:.0f}s")
 
     tot = dict(q=0, q_nocand=0, ret=0, pre=0, saved=0, t_ret=0, t_pre=0, t_saved=0, t_all=0)

@@ -5,3 +5,5 @@ date,git_hash,change,cv_scores,lb_score
 2026-09-26,0d54117,decide.py t=0.65,f05=0.9541;ceiling=0.9778,
 2026-09-26,0d54117,lb-2 submitted: v1 blocking + LightGBM t=0.65,cv_f05=0.9541,0.943
 2026-09-26,93e0435,fastloop v1 baseline (floor=0.5 alpha=0.9 m=3),oracle_f05=0.9778;pair_recall=0.9372;cands_mean=5.8054;cands_p95=35.3333,
+2026-09-26,511892c,fastloop v2 v2 fix A3: weighted rank + PRE_CAP=80 (floor=0.5 alpha=0.9 m=3),oracle_f05=0.9849;pair_recall=0.9526;cands_mean=5.9448;cands_p95=36.3333,
+2026-09-26,432c68c,fastloop v2 v2 fix S1/S2: key evidence in stage-1 score (floor=0.5 alpha=0.9 m=3),oracle_f05=0.9863;pair_recall=0.9571;cands_mean=6.0466;cands_p95=36.3333,
