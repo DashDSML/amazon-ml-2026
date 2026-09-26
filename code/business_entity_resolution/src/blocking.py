@@ -43,7 +43,7 @@ import polars as pl
 from rapidfuzz import fuzz
 from rapidfuzz.process import cpdist
 
-import evaluate as ev
+import cv_harness as ev
 from data import DATASET_DIR
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)  # polars 1.x explode/is_in notices
