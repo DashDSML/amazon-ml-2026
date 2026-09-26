@@ -1,48 +1,66 @@
-"""Tune the entity-level decision rule on TRAIN, apply it to TEST, write the submission.
+"""Decide the entity-level matches and write the submission (CLAUDE.md D6).
 
 Candidates come from blocking v1 (dataset/cache/blocking_v1/{split}/candidates.parquet,
 columns src, qi, s1, score, name_s, addr_s, rank -- already the final candidate set, one
-row per (S2/S3 record, its rank-th best S1) up to m=3). The decision rule keeps a pair if
-it is the record's rank-0 (best) destination with score >= t1, and optionally also keeps
-rank-1 with a stricter score >= t2 when that improves CV.
+row per (S2/S3 record, its rank-th best S1) up to m=3).
 
-t1 is chosen by sweeping real macro F0.5 (not the blocking oracle) on TRAIN only, over the
-full candidate set; nothing is fit on TEST. The chosen rule is applied to the TEST
-candidates, mapped back to entity IDs, and written as output/matching_results.tsv (the
-decision) and output/candidate_pairs.tsv (the full test candidate set), then checked with
-utils/validate_submission.py.
+Two decision methods, chosen with --method:
 
-    python make_submission.py
+  rule (default): keep a pair if it is the record's rank-0 (blocking-score) destination
+    with score >= t1, optionally also rank-1 with a stricter t2. t1/t2 are swept on TRAIN
+    only against real macro F0.5 (not the blocking oracle).
+
+  model: use the LightGBM matcher (model.py) -- each record's highest-probability
+    candidate, accepted iff probability >= the threshold decide.py tuned on the fold-4
+    holdout (dataset/cache/blocking_v1/model/decision.json). Requires test features
+    already built (python features.py --split test) and the model already trained
+    (python model.py).
+
+Either way: candidate_pairs.tsv is always the full test candidate set (unfiltered), the
+decision is written to matching_results.tsv, matches are checked with
+validate_submission.py, and the run is logged.
+
+    python make_submission.py                  # rule (tunes on train, ~1-2 min)
+    python make_submission.py --method model    # model (needs features/model built first)
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
 
+import lightgbm as lgb
 import numpy as np
 import polars as pl
 
 import cv_harness as ev
+import decide
 from blocking import make_ctx, out_dir
 from data import DATASET_DIR, REPO_ROOT
+from model import MODEL_DIR
 
 T_GRID = [round(0.5 + 0.025 * i, 3) for i in range(19)]  # 0.500 .. 0.950
 OUT_DIR = REPO_ROOT / "output"
 
 
+def load_candidates(split: str) -> pl.DataFrame:
+    return pl.read_parquet(out_dir(split, None) / "candidates.parquet")
+
+
+# ---------------------------------------------------------------- method: rule
 def eval_mask(s1: np.ndarray, is_true: np.ndarray, ctx: ev.EvalCtx, mask: np.ndarray) -> dict:
     return ev.score_pairs(s1[mask], is_true[mask], ctx, oracle=False)
 
 
 def sweep_rank0(rank: np.ndarray, score: np.ndarray, s1: np.ndarray, is_true: np.ndarray, ctx: ev.EvalCtx):
     print("=== sweep: keep pair iff rank==0 and score>=t1 ===")
-    best_t, best_f05, rows = None, -1.0, []
+    best_t, best_f05 = None, -1.0
     for t in T_GRID:
         mask = (rank == 0) & (score >= t)
         res = eval_mask(s1, is_true, ctx, mask)
-        rows.append((t, res["f05"], res["mean"]))
         print(f"  t1={t:.3f}  f05={res['f05']:.4f}  cands/S1={res['mean']:.2f}")
         if res["f05"] > best_f05:
             best_t, best_f05 = t, res["f05"]
@@ -53,11 +71,10 @@ def sweep_rank0(rank: np.ndarray, score: np.ndarray, s1: np.ndarray, is_true: np
 def sweep_rank1(rank: np.ndarray, score: np.ndarray, s1: np.ndarray, is_true: np.ndarray, ctx: ev.EvalCtx, t1: float):
     print(f"\n=== sweep: also allow rank==1 with score>=t2 (t1 fixed at {t1:.3f}) ===")
     base = (rank == 0) & (score >= t1)
-    best_t2, best_f05, rows = None, -1.0, []
+    best_t2, best_f05 = None, -1.0
     for t2 in [t for t in T_GRID if t >= t1]:
         mask = base | ((rank == 1) & (score >= t2))
         res = eval_mask(s1, is_true, ctx, mask)
-        rows.append((t2, res["f05"], res["mean"]))
         print(f"  t2={t2:.3f}  f05={res['f05']:.4f}  cands/S1={res['mean']:.2f}")
         if res["f05"] > best_f05:
             best_t2, best_f05 = t2, res["f05"]
@@ -72,40 +89,8 @@ def report(name: str, res: dict, ctx: ev.EvalCtx) -> None:
         print(line)
 
 
-def load_candidates(split: str) -> pl.DataFrame:
-    return pl.read_parquet(out_dir(split, None) / "candidates.parquet")
-
-
-def build_id_lists(cands: pl.DataFrame, split: str, id_col: str) -> pl.DataFrame:
-    """One row per test S1 (entity_id, comma-joined ids), including S1 with no rows in cands."""
-    s1_ids = pl.scan_parquet(ev.norm_path(split, 1)).select("entity_id").with_row_index("s1").collect()
-    parts = []
-    for src in (2, 3):
-        q_ids = pl.scan_parquet(ev.norm_path(split, src)).select("entity_id").with_row_index("qi").collect()
-        part = cands.filter(pl.col("src") == src).join(q_ids, on="qi", how="left")
-        assert part["entity_id"].null_count() == 0, f"unmapped qi in source{src}"
-        parts.append(part.select("s1", "entity_id"))
-    long = pl.concat(parts)
-    grouped = (
-        long.group_by("s1")
-        .agg(pl.col("entity_id").unique().sort().alias(id_col))
-        .with_columns(pl.col(id_col).list.join(",").alias(id_col))
-    )
-    return (
-        s1_ids.join(grouped, on="s1", how="left")
-        .with_columns(pl.col(id_col).fill_null(""))
-        .select(pl.col("entity_id").alias("source1_entity_id"), id_col)
-        .sort("source1_entity_id")
-    )
-
-
-def write_tsv(df: pl.DataFrame, path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    df.write_csv(path, separator="\t", quote_style="never", include_bom=False)
-    print(f"wrote {df.height:,} rows -> {path.relative_to(REPO_ROOT)}")
-
-
-def main() -> None:
+def apply_rule(cands_test: pl.DataFrame) -> pl.DataFrame:
+    """Tune the rank/score rule on TRAIN, then apply the chosen rule to TEST candidates."""
     truth = ev.load_truth_idx()
     cands_train = load_candidates("train")
     df = cands_train.join(
@@ -139,14 +124,78 @@ def main() -> None:
         {"f05": res["f05"], "pair_recall": res["pair_recall"], "cands_mean": res["mean"]},
     )
 
-    # ---- apply chosen rule to test ----
-    cands_test = load_candidates("test")
     rank_t, score_t = cands_test["rank"].to_numpy(), cands_test["score"].to_numpy()
     if rule[0] == "rank0":
         mask_t = (rank_t == 0) & (score_t >= rule[1])
     else:
         mask_t = ((rank_t == 0) & (score_t >= rule[1])) | ((rank_t == 1) & (score_t >= rule[2]))
-    pred_test = cands_test.filter(pl.Series(mask_t))
+    return cands_test.filter(pl.Series(mask_t))
+
+
+# ---------------------------------------------------------------- method: model
+def apply_model(cands_test: pl.DataFrame) -> pl.DataFrame:
+    """LightGBM matcher (model.py) + decide.py's tuned one-owner threshold, applied to TEST."""
+    feat_path = out_dir("test", None) / "features.parquet"
+    assert feat_path.exists(), f"missing {feat_path}; run: python features.py --split test"
+    meta = json.loads((MODEL_DIR / "meta.json").read_text())
+    decision_path = MODEL_DIR / "decision.json"
+    assert decision_path.exists(), f"missing {decision_path}; run: python decide.py"
+    decision = json.loads(decision_path.read_text())
+
+    feat = pl.read_parquet(feat_path)
+    booster = lgb.Booster(model_file=str(MODEL_DIR / "lgbm_full.txt"))
+    prob = booster.predict(feat.select(meta["feature_cols"]).to_numpy())
+    top1 = decide.top1_per_record(feat, prob)
+    accepted = top1.filter(pl.col("prob") >= decision["t"]).select("src", "qi", "s1")
+    print(
+        f"[model] t={decision['t']:.2f} (tuned on fold {decision['holdout_fold']}, "
+        f"holdout f05={decision['f05']:.4f}, blocking oracle ceiling={decision['ceiling']:.4f}) "
+        f"-> {accepted.height:,} matched pairs"
+    )
+    # semi join: keeps cands_test's own columns/order, guarantees matches subset candidates
+    return cands_test.join(accepted, on=["src", "qi", "s1"], how="semi")
+
+
+# ---------------------------------------------------------------- shared: id mapping + output
+def build_id_lists(cands: pl.DataFrame, split: str, id_col: str) -> pl.DataFrame:
+    """One row per test S1 (entity_id, comma-joined ids), including S1 with no rows in cands."""
+    s1_ids = pl.scan_parquet(ev.norm_path(split, 1)).select("entity_id").with_row_index("s1").collect()
+    parts = []
+    for src in (2, 3):
+        q_ids = pl.scan_parquet(ev.norm_path(split, src)).select("entity_id").with_row_index("qi").collect()
+        part = cands.filter(pl.col("src") == src).join(q_ids, on="qi", how="left")
+        assert part["entity_id"].null_count() == 0, f"unmapped qi in source{src}"
+        parts.append(part.select("s1", "entity_id"))
+    long = pl.concat(parts)
+    grouped = (
+        long.group_by("s1")
+        .agg(pl.col("entity_id").unique().sort().alias(id_col))
+        .with_columns(pl.col(id_col).list.join(",").alias(id_col))
+    )
+    return (
+        s1_ids.join(grouped, on="s1", how="left")
+        .with_columns(pl.col(id_col).fill_null(""))
+        .select(pl.col("entity_id").alias("source1_entity_id"), id_col)
+        .sort("source1_entity_id")
+    )
+
+
+def write_tsv(df: pl.DataFrame, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    df.write_csv(path, separator="\t", quote_style="never", include_bom=False)
+    print(f"wrote {df.height:,} rows -> {path.relative_to(REPO_ROOT)}")
+
+
+def main() -> None:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--method", choices=["rule", "model"], default="rule")
+    args = ap.parse_args()
+
+    cands_test = load_candidates("test")
+    if args.method == "model":
+        pred_test = apply_model(cands_test)
+    else:
+        pred_test = apply_rule(cands_test)
     print(f"\ntest: {cands_test.height:,} candidate pairs -> {pred_test.height:,} matched pairs")
 
     matching = build_id_lists(pred_test, "test", "matched_entity_ids")
