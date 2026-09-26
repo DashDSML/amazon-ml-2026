@@ -169,7 +169,7 @@ def main(floor: float, alpha: float, m: int, note: str, version: str = "v1") -> 
             if cand.height:
                 pc = bk._codes(cand)
                 stage["pre"].append((src, pc[np.isin(pc, tcodes)]))
-                top = bk.keep_top(bk.score(cand, chunk, s1, s1_pos), src)
+                top = bk.keep_top(bk.score(cand, chunk, s1, s1_pos, version=version), src)
                 sc = bk._codes(top)
                 stage["saved"].append((src, sc[np.isin(sc, tcodes)]))
                 tops.append(top)

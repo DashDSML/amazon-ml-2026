@@ -75,6 +75,15 @@ Q_CHUNK = 25_000
 S1_CHUNK = 200_000
 SCORE_BATCH = 400_000
 W_NAME, W_ADDR, HOUSE_ADJ = 0.65, 0.35, 0.05
+# v2 fix S1/S2 (BLOCKING_V2 #4, buckets "S1 score-top5" + "S2 pruned", 1.97% combined):
+# true pairs that win on shared-key evidence (the v2 retrieval weight, fix A3) but have a
+# weak rapidfuzz score were losing the top-SAVE_CAP-by-score cut and the floor/alpha prune.
+# Add a saturating transform of that same weight as a small additive term on the stage-1
+# score. W_KEY and KEY_TAU are fixed constants (not fit on any row, let alone test): KEY_TAU
+# sets the weight scale at which evidence saturates (~1 confident key hit), W_KEY bounds the
+# max boost so a pair still needs real string similarity, not key evidence alone, to score
+# high. To be validated -- like KIND_MULT/PRE_CAP_V2 -- by the train-only fastloop.
+W_KEY, KEY_TAU = 0.15, 3.0
 
 GRID = [  # (floor, alpha, m)
     (0.0, 0.0, 5),
@@ -225,7 +234,7 @@ def retrieve(
             })
             .sort(["qi", "weight", "s1"], descending=[False, True, False])
             .filter(pl.int_range(pl.len()).over("qi") < PRE_CAP_V2)
-            .select("qi", "s1", "hits")
+            .select("qi", "s1", "hits", "weight")
         )
         return cand, uq
 
@@ -248,7 +257,16 @@ def _sim(a: pl.Series, b: pl.Series, scorer) -> np.ndarray:
     return cpdist(a.to_list(), b.to_list(), scorer=scorer, workers=-1, dtype=np.float32) / 100.0
 
 
-def score(cand: pl.DataFrame, chunk: pl.DataFrame, s1: pl.DataFrame, s1_pos: np.ndarray) -> pl.DataFrame:
+def score(
+    cand: pl.DataFrame, chunk: pl.DataFrame, s1: pl.DataFrame, s1_pos: np.ndarray, version: str = "v1",
+) -> pl.DataFrame:
+    """rapidfuzz name/address score, plus (v2 only) a small key-evidence boost.
+
+    v2 fix S1/S2: adds W_KEY * (1 - exp(-weight/KEY_TAU)) to the stage-1 score, where
+    weight is retrieve()'s v2 rarity-weighted shared-key sum. Saturating and additive, so
+    it rescues weak-fuzzy/strong-key true pairs without letting key evidence alone reach a
+    high score. No-op when version != "v2" (v1 output is unaffected).
+    """
     qloc = np.searchsorted(chunk["i"].to_numpy(), cand["qi"].to_numpy())
     sloc = s1_pos[cand["s1"].to_numpy()]
     n = cand.height
@@ -271,6 +289,9 @@ def score(cand: pl.DataFrame, chunk: pl.DataFrame, s1: pl.DataFrame, s1_pos: np.
         eq = (hq == hs).to_numpy()
         house[a : a + len(qb)] = np.where(has_h, np.where(eq, HOUSE_ADJ, -HOUSE_ADJ), 0.0)
     total = np.where(np.isnan(addr_s), name_s, W_NAME * name_s + W_ADDR * np.nan_to_num(addr_s)) + house
+    if version == "v2" and "weight" in cand.columns:
+        key_evidence = 1.0 - np.exp(-cand["weight"].to_numpy().astype(np.float64) / KEY_TAU)
+        total = total + W_KEY * key_evidence
     return cand.with_columns(
         pl.Series("name_s", name_s),
         pl.Series("addr_s", addr_s),
@@ -346,7 +367,7 @@ def run_retrieval(split: str, smoke: int | None, od: Path, version: str = "v1") 
             chunk = q.slice(off, Q_CHUNK)
             q_cc = chunk.select(cc_expr).to_series().to_numpy()
             cand, uq = retrieve(chunk, keys, s1i, s1_cc, q_cc, version=version)
-            top = keep_top(score(cand, chunk, s1, s1_pos), src) if cand.height else None
+            top = keep_top(score(cand, chunk, s1, s1_pos, version=version), src) if cand.height else None
             tot["q"] += chunk.height
             tot["q_nocand"] += chunk.height - cand["qi"].n_unique()
             tot["ret"] += len(uq)
