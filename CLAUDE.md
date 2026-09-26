@@ -57,3 +57,11 @@ Design direction:
 ## Environment
 - Windows, PowerShell. Use `python` (not `python3`), `pathlib` for all paths, and keep the code OS-independent so it also runs on Linux/EC2.
 - Python 3.12 in `.venv`, created with `py -3.12 -m venv .venv`. Activate with `.venv\Scripts\Activate.ps1` (Windows) or `source .venv/bin/activate` (Linux).
+
+## Token economy (strict)
+- Do not start monitors or background jobs. Do not poll progress.
+- Develop and test on samples (≤200k rows). Never run on full data yourself: print the exact command and I will run it in a separate terminal and paste back the summary.
+- Keep command output short: print summaries, head(20) at most, never full tables or files.
+- Do only the listed deliverables. No extra optimisation, refactoring or exploration unless asked. If something beyond scope looks worthwhile, mention it in one line and stop.
+- Read only the files needed for the task, and only the relevant parts.
+- When the task is done, commit, update STATUS.md in ≤15 lines, and stop.
