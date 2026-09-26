@@ -1,0 +1,2 @@
+date,git_hash,change,cv_scores,lb_score
+2026-09-26,c828735,blocking_v1 floor=0.5 alpha=0.9 m=3,oracle_f05=0.9778;pair_recall=0.9384;cands_mean=5.8205;cands_median=5.0000;cands_p95=11.0000,
