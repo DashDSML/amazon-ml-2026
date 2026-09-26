@@ -1,3 +1,6 @@
 date,git_hash,change,cv_scores,lb_score
 2026-09-26,c828735,blocking_v1 floor=0.5 alpha=0.9 m=3,oracle_f05=0.9778;pair_recall=0.9384;cands_mean=5.8205;cands_median=5.0000;cands_p95=11.0000,
 2026-09-26,b74e56c,make_submission rule=rank0 t1=0.950 t2=None,f05=0.8388;pair_recall=0.7217;cands_mean=2.6465,
+2026-09-26,0d54117,lightgbm matcher num_leaves=127 lr=0.05 best_iter=452,best_iteration=452,
+2026-09-26,0d54117,decide.py t=0.65,f05=0.9541;ceiling=0.9778,
+2026-09-26,0d54117,lb-2 submitted: v1 blocking + LightGBM t=0.65,cv_f05=0.9541,0.943
