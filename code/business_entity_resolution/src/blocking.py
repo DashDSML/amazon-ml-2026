@@ -294,6 +294,7 @@ def run_retrieval(split: str, smoke: int | None, od: Path) -> None:
         if truth is not None:
             tcodes = np.sort(_codes(truth.filter(pl.col("src") == src)))
             tot["t_all"] += len(tcodes)
+        t_src = time.perf_counter()
         for n_chunk, off in enumerate(range(0, q.height, Q_CHUNK)):
             chunk = q.slice(off, Q_CHUNK)
             q_cc = chunk.select(cc_expr).to_series().to_numpy()
@@ -306,6 +307,12 @@ def run_retrieval(split: str, smoke: int | None, od: Path) -> None:
             if top is not None:
                 tot["saved"] += top.height
                 top.write_parquet(od / "parts" / f"s{src}_{n_chunk:05d}.parquet")
+            if (n_chunk + 1) % 20 == 0:
+                el = time.perf_counter() - t_src
+                done = off + chunk.height
+                eta = el / done * (q.height - done)
+                print(f"  [progress] source{src}: {done:,}/{q.height:,} records, "
+                      f"{el / 60:.1f} min elapsed, ~{eta / 60:.0f} min left for this source", flush=True)
             if tcodes is not None:
                 tot["t_ret"] += int(np.isin(uq, tcodes).sum())
                 tot["t_pre"] += int(np.isin(_codes(cand), tcodes).sum()) if cand.height else 0
