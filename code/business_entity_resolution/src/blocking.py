@@ -44,6 +44,7 @@ import argparse
 import shutil
 import time
 import warnings
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -130,6 +131,45 @@ def load_norm(split: str, source: int) -> pl.DataFrame:
     ).drop("addr_missing")
 
 
+# ---------------------------------------------------------------- name-token DF (v2, G1)
+# Fix P (BLOCKING_V2 #2/#4): a per-batch document-frequency table is both inconsistent
+# (an S1 record and its true S2/S3 match can land in different batches and pick different
+# "rarest" tokens, so the composite key silently fails to match) and, on a test run, a
+# token-frequency table fit from test rows -- BLOCKING_V2 #2 lists that as train-only. So
+# this is instead ONE global table, fit on TRAIN S1+S2+S3 only, cached to
+# dataset/cache/blocking_v2/name_token_df.parquet and reused unchanged by every v2 run
+# (train or test), on both the index side and the query side (T12, G1).
+NAME_DF_PATH = DATASET_DIR / "cache" / "blocking_v2" / "name_token_df.parquet"
+
+
+def build_name_token_df(force: bool = False) -> Path:
+    """Fit the global name-token document-frequency table on TRAIN only (T12).
+
+    Document frequency = number of train S1/S2/S3 records containing the token (each
+    record's name_tokens is already deduplicated, so exploding needs no further unique()).
+    Never point this at test data -- the split is hardcoded to "train".
+    """
+    if not force and NAME_DF_PATH.exists():
+        return NAME_DF_PATH
+    parts = [
+        pl.scan_parquet(ev.norm_path("train", source))
+        .select(pl.col("name_tokens").fill_null(pl.lit([], dtype=pl.List(pl.String))).alias("t"))
+        .explode("t")
+        .filter(pl.col("t").is_not_null() & (pl.col("t") != ""))
+        for source in (1, 2, 3)
+    ]
+    df_table = pl.concat(parts).collect().group_by("t").len().rename({"len": "df"})
+    NAME_DF_PATH.parent.mkdir(parents=True, exist_ok=True)
+    df_table.write_parquet(NAME_DF_PATH)
+    return NAME_DF_PATH
+
+
+@lru_cache(maxsize=1)
+def _name_df() -> pl.DataFrame:
+    build_name_token_df()
+    return pl.read_parquet(NAME_DF_PATH)
+
+
 # ---------------------------------------------------------------- keys
 def _k(letter: str, *parts: pl.Expr) -> pl.Expr:
     return pl.concat_str([pl.col("country"), pl.lit(f"\x1f{letter}\x1f"), *parts])
@@ -138,16 +178,18 @@ def _k(letter: str, *parts: pl.Expr) -> pl.Expr:
 def key_frame(df: pl.DataFrame, version: str = "v1") -> pl.DataFrame:
     """(i u32, kind u8, k u64) for every blocking key of every record in df.
 
-    v2 adds two composite keys (fix A1/B, BLOCKING_V2 #4), both computed purely from the
-    records in ``df`` (no fitted table, no test-derived state -- G1):
-      P  the record's two *rarest* name tokens (lowest document frequency within this same
-         batch of records) as an unordered pair. Splits the oversized single-token (T) and
-         4-gram (G) blocks that a common name word creates, without needing a train-fit IDF
-         table -- "rare" is a query-time property of the batch being indexed/queried, the
-         same allowance already used for KIND_MULT's block-size weighting.
+    v2 adds two composite keys (fix A1/B, BLOCKING_V2 #4):
+      P  the record's two *rarest* name tokens (lowest document frequency in the global,
+         train-fit _name_df() table -- see build_name_token_df(); unseen tokens count as
+         df=0, rarest, T12) as an unordered pair. Splits the oversized single-token (T) and
+         4-gram (G) blocks that a common name word creates. Using one fixed table (not a
+         per-batch count) is required for G1 (never fit from test rows) and for correctness
+         (an S1 record and its true S2/S3 match, indexed/queried in different-sized
+         batches, must pick the same "rarest" pair to ever match on this key).
       N  an address token (street/locality-like, non-numeric) plus city, with NO house
          number required -- unlike kind A. Purely address-based, so a record whose name is
          scrambled or gibberish (bucket B) can still be retrieved by its address alone.
+         Computed purely from ``df`` -- no fitted table needed.
     """
     base = df.select("i", "country", "name_compact", "name_tokens", "addr_house_no", "addr_city", "addr_tokens")
     kind = lambda c: pl.lit(c, dtype=pl.UInt8).alias("kind")  # noqa: E731
@@ -185,10 +227,10 @@ def key_frame(df: pl.DataFrame, version: str = "v1") -> pl.DataFrame:
     parts.append(addr.select("i", kind(5), _k("A", pl.col("addr_house_no"), pl.lit("|"), pl.col("a")).alias("s")))
 
     if version == "v2":
-        df_t = tok.group_by("t").len().rename({"len": "_df"})
         rarest = (
-            tok.join(df_t, on="t")
-            .sort(["i", "_df", "t"])
+            tok.join(_name_df(), on="t", how="left")
+            .with_columns(pl.col("df").fill_null(0))  # unseen token (e.g. French) = rarest, T12
+            .sort(["i", "df", "t"])  # ties broken alphabetically: deterministic on both sides
             .with_columns(_r=pl.int_range(pl.len()).over("i"))
             .filter(pl.col("_r") < 2)
         )
