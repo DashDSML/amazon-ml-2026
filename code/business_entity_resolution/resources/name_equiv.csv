@@ -1,0 +1,9 @@
+ckey,variant,canonical,count,source
+*,company,co,777,mined
+india,limited,ltd,18351,mined
+india,corporation,corp,562,mined
+us,incorporated,inc,2315,mined
+*,etablissements,ets,0,general_knowledge
+*,etablissement,ets,0,general_knowledge
+*,compagnie,cie,0,general_knowledge
+france,et,and,0,general_knowledge

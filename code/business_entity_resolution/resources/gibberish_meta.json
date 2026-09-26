@@ -1,0 +1,6 @@
+{
+  "threshold": -0.8046542601465193,
+  "heldout_s1_flag_rate": 0.01,
+  "heldout_alias_flag_rate": 0.9554224883566201,
+  "heldout_no_overlap_flag_rate": 0.6169625246548324
+}

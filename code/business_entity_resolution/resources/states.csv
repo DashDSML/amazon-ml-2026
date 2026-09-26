@@ -1,0 +1,139 @@
+ckey,variant,state_key,kind,count,rate,spec
+india,andhra pradesh,andhra pradesh,s1_form,17877,1.0,1.0
+india,ap,andhra pradesh,code,1591,0.5469233413544173,0.9820987654320987
+india,ఆంధ్రప్రదేశ్,andhra pradesh,native,1112,0.3822619456858027,0.9832007073386384
+india,bihar,bihar,s1_form,22850,1.0,1.0
+india,br,bihar,code,2167,0.545020120724346,0.9904021937842779
+india,बिहार,bihar,native,1540,0.3873239436619718,0.9916291049581455
+india,delhi,delhi,s1_form,121322,1.0,1.0
+india,gujarat,gujarat,s1_form,57445,1.0,1.0
+india,gj,gujarat,code,5418,0.5579240037071362,0.9944933920704846
+india,ગુજરાત,gujarat,native,3692,0.38018741633199465,0.9956850053937433
+india,haryana,haryana,s1_form,35829,1.0,1.0
+india,hr,haryana,code,3304,0.5568852182706894,0.976936723832052
+india,हरियाणा,haryana,native,2215,0.37333558065059835,0.9744830620325561
+india,karnataka,karnataka,s1_form,69989,1.0,1.0
+india,ka,karnataka,code,6539,0.5499116979227987,0.9946759963492546
+india,ಕರ್ನಾಟಕ,karnataka,native,4569,0.3842401816499874,0.9962930658525948
+india,kerala,kerala,s1_form,35377,1.0,1.0
+india,kl,kerala,code,2679,0.39641905889316364,0.9922222222222222
+india,കേരളം,kerala,native,1867,0.2762651672092335,0.9894011658717541
+india,keralam,kerala,name,1832,0.27108612015389166,0.9924160346695557
+india,madhya pradesh,madhya pradesh,s1_form,22503,1.0,1.0
+india,mp,madhya pradesh,code,2138,0.553026383859286,0.9958081043316255
+india,मध्य प्रदेश,madhya pradesh,native,1472,0.3807553026383859,0.9986431478968792
+india,maharashtra,maharashtra,s1_form,191679,1.0,1.0
+india,mh,maharashtra,code,18161,0.5526612093362953,0.9980765003297428
+india,महाराष्ट्र,maharashtra,native,12579,0.38279419372508444,0.9977790116601888
+india,orissa,orissa,s1_form,13897,1.0,1.0
+india,odisha,orissa,name,1114,0.3725752508361204,1.0
+india,od,orissa,code,1042,0.348494983277592,0.9961759082217974
+india,ଓଡ଼ିଶା,orissa,native,696,0.23277591973244147,0.9985652797704447
+india,punjab,punjab,s1_form,13016,1.0,1.0
+india,pb,punjab,code,1169,0.5511551155115512,0.943502824858757
+india,ਪੰਜਾਬ,punjab,native,795,0.37482319660537483,0.9430604982206405
+india,rajasthan,rajasthan,s1_form,32183,1.0,1.0
+india,rj,rajasthan,code,3042,0.5610475839173736,0.9944426283099052
+india,राजस्थान,rajasthan,native,2027,0.3738472888233124,0.9941147621383031
+india,tamil nadu,tamil nadu,s1_form,63290,1.0,1.0
+india,tn,tamil nadu,code,5971,0.5509319062557667,0.9981611501170177
+india,தமிழ்நாடு,tamil nadu,native,4171,0.3848496032478317,0.9971312455175712
+india,telangana,telangana,s1_form,55428,1.0,1.0
+india,tg,telangana,code,4149,0.3895774647887324,0.9866825208085612
+india,తెలంగాణ,telangana,native,2936,0.27568075117370894,0.9888851465139777
+india,uttar pradesh,uttar pradesh,s1_form,73631,1.0,1.0
+india,up,uttar pradesh,code,6960,0.5556442599393262,0.9813874788494078
+india,उत्तर प्रदेश,uttar pradesh,native,4740,0.3784129011655756,0.9777227722772277
+india,west bengal,west bengal,s1_form,56872,1.0,1.0
+india,wb,west bengal,code,5563,0.5570799118766273,0.9974896897973821
+india,পশ্চিমবঙ্গ,west bengal,native,3752,0.3757260164229922,0.9994672349493873
+us,ak,ak,s1_form,3680,1.0,1.0
+us,alaska,ak,name,333,0.8809523809523809,1.0
+us,al,al,s1_form,32583,1.0,1.0
+us,alabama,al,name,2735,0.9141042780748663,1.0
+us,ar,ar,s1_form,27099,1.0,1.0
+us,arkansas,ar,name,2294,0.9035053170539582,1.0
+us,az,az,s1_form,56535,1.0,1.0
+us,arizona,az,name,4741,0.8977466388941489,1.0
+us,ca,ca,s1_form,37396,1.0,1.0
+us,california,ca,name,3148,0.9069432440218957,1.0
+us,co,co,s1_form,4254,1.0,1.0
+us,colorado,co,name,332,0.8900804289544236,1.0
+us,ct,ct,s1_form,18427,1.0,1.0
+us,connecticut,ct,name,1566,0.8974212034383954,1.0
+us,dc,dc,s1_form,6764,1.0,1.0
+us,district of columbia,dc,name,578,0.918918918918919,1.0
+us,de,de,s1_form,8726,1.0,1.0
+us,delaware,de,name,726,0.8875305623471883,1.0
+us,fl,fl,s1_form,675,1.0,1.0
+us,florida,fl,name,44,0.7586206896551724,1.0
+us,ga,ga,s1_form,3255,1.0,1.0
+us,georgia,ga,name,278,0.9266666666666666,1.0
+us,ia,ia,s1_form,22479,1.0,1.0
+us,iowa,ia,name,1807,0.9071285140562249,1.0
+us,id,id,s1_form,1174,1.0,1.0
+us,idaho,id,name,108,0.9310344827586207,1.0
+us,il,il,s1_form,75660,1.0,1.0
+us,illinois,il,name,6271,0.8993259716047612,1.0
+us,in,in,s1_form,49413,1.0,1.0
+us,indiana,in,name,4138,0.9054704595185996,1.0
+us,ks,ks,s1_form,15739,1.0,1.0
+us,kansas,ks,name,1309,0.9027586206896552,1.0
+us,ky,ky,s1_form,29475,1.0,1.0
+us,kentucky,ky,name,2448,0.9029878273699742,1.0
+us,la,la,s1_form,4278,1.0,1.0
+us,louisiana,la,name,366,0.8992628992628993,1.0
+us,ma,ma,s1_form,56803,1.0,1.0
+us,massachusetts,ma,name,4751,0.9096304805667241,1.0
+us,md,md,s1_form,40657,1.0,1.0
+us,maryland,md,name,3448,0.905937992643195,1.0
+us,me,me,s1_form,12123,1.0,1.0
+us,maine,me,name,1003,0.8860424028268551,1.0
+us,mn,mn,s1_form,31135,1.0,1.0
+us,minnesota,mn,name,2526,0.8960624334870522,1.0
+us,mo,mo,s1_form,25953,1.0,1.0
+us,missouri,mo,name,2223,0.9069767441860465,1.0
+us,mt,mt,s1_form,10012,1.0,1.0
+us,montana,mt,name,856,0.9058201058201059,1.0
+us,nc,nc,s1_form,94673,1.0,1.0
+us,north carolina,nc,name,8065,0.906893061958844,1.0
+us,nd,nd,s1_form,6704,1.0,1.0
+us,north dakota,nd,name,561,0.8990384615384616,1.0
+us,ne,ne,s1_form,5732,1.0,1.0
+us,nebraska,ne,name,481,0.8990654205607477,1.0
+us,nm,nm,s1_form,11635,1.0,1.0
+us,new mexico,nm,name,1028,0.9121561668145519,1.0
+us,ny,ny,s1_form,102340,1.0,1.0
+us,new york,ny,name,8668,0.8948998554614908,1.0
+us,oh,oh,s1_form,85246,1.0,1.0
+us,ohio,oh,name,7094,0.9023149325871279,1.0
+us,ok,ok,s1_form,22719,1.0,1.0
+us,oklahoma,ok,name,1898,0.9085686931546194,1.0
+us,or,or,s1_form,29826,1.0,1.0
+us,oregon,or,name,2498,0.9044170890658942,0.9960127591706539
+us,pa,pa,s1_form,11827,1.0,1.0
+us,pennsylvania,pa,name,960,0.8880666049953746,1.0
+us,ri,ri,s1_form,753,1.0,1.0
+us,rhode island,ri,name,69,0.92,1.0
+us,sc,sc,s1_form,3310,1.0,1.0
+us,south carolina,sc,name,290,0.8923076923076924,1.0
+us,sd,sd,s1_form,1381,1.0,1.0
+us,south dakota,sd,name,112,0.9032258064516129,1.0
+us,tn,tn,s1_form,59648,1.0,1.0
+us,tennessee,tn,name,5040,0.9064748201438849,1.0
+us,tx,tx,s1_form,133202,1.0,1.0
+us,texas,tx,name,11129,0.9070828918412258,1.0
+us,ut,ut,s1_form,23122,1.0,1.0
+us,utah,ut,name,1964,0.9088385006941231,1.0
+us,va,va,s1_form,59579,1.0,1.0
+us,virginia,va,name,4975,0.9004524886877828,0.9995981514968857
+us,vt,vt,s1_form,5253,1.0,1.0
+us,vermont,vt,name,456,0.9047619047619048,1.0
+us,wa,wa,s1_form,42179,1.0,1.0
+us,washington,wa,name,3547,0.9118251928020565,0.9741829167811041
+us,wi,wi,s1_form,31434,1.0,1.0
+us,wisconsin,wi,name,2717,0.9080882352941176,1.0
+us,wv,wv,s1_form,15907,1.0,1.0
+us,west virginia,wv,name,1318,0.8984321745057942,1.0
+us,wy,wy,s1_form,2868,1.0,1.0
+us,wyoming,wy,name,227,0.9227642276422764,0.9912663755458515
