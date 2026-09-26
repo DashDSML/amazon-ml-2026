@@ -21,16 +21,21 @@ from cv_harness import norm_path
 EXPECTED_ROWS = {"train": (2_206_821, 5_034_616, 5_285_603), "test": (1_732_544, 4_887_273, 5_082_316)}
 KEY_COLS = [
     "entity_id", "country", "name_core", "name_compact", "name_tokens", "name_fold",
-    "addr_nolm", "addr_tokens", "addr_house_no", "addr_city", "addr_missing",
+    "addr_nolm", "addr_tokens", "addr_missing",
 ]
+# Sub-components of an address that legitimately can't always be extracted
+# (no house number in the string, no recognized city token, etc.); null here
+# is not a data error, just "not found". blocking.py already fill_null("")s
+# these, so a null and an empty string are equivalent downstream.
+OPTIONAL_COLS = ["addr_house_no", "addr_city"]
 EMPTY_RATES = {
-    "name_compact": pl.col("name_compact") == "",
-    "name_core": pl.col("name_core") == "",
-    "name_tok0": pl.col("name_tokens").list.len() == 0,
+    "name_compact": pl.col("name_compact").fill_null("") == "",
+    "name_core": pl.col("name_core").fill_null("") == "",
+    "name_tok0": pl.col("name_tokens").list.len().fill_null(0) == 0,
     "addr_missing": pl.col("addr_missing"),
-    "addr_nolm": pl.col("addr_nolm") == "",
-    "house_no": pl.col("addr_house_no") == "",
-    "city": pl.col("addr_city") == "",
+    "addr_nolm": pl.col("addr_nolm").fill_null("") == "",
+    "house_no": pl.col("addr_house_no").fill_null("") == "",
+    "city": pl.col("addr_city").fill_null("") == "",
     "gibberish": pl.col("name_is_gibberish"),
 }
 
@@ -64,7 +69,8 @@ def check(split: str) -> int:
                     continue
                 bad = c in KEY_COLS
                 fails += bad
-                print(f"{'FAIL' if bad else 'note'} {split} s{src} [{row['country']}]: {c} nulls={v:,} ({v / row['_n']:.4f})")
+                tag = "FAIL" if bad else ("note (optional)" if c in OPTIONAL_COLS else "note")
+                print(f"{tag} {split} s{src} [{row['country']}]: {c} nulls={v:,} ({v / row['_n']:.4f})")
         if nulls["country"].null_count():
             print(f"FAIL {split} s{src}: null country rows")
             fails += 1
