@@ -1,6 +1,6 @@
 ckey,variant,state_key,kind,count,rate,spec
 india,andhra pradesh,andhra pradesh,s1_form,17877,1.0,1.0
-india,ap,andhra pradesh,code,1591,0.5469233413544173,0.9820987654320987
+india,ap,andhra pradesh,code,1588,0.5458920591268477,0.9814585908529048
 india,ఆంధ్రప్రదేశ్,andhra pradesh,native,1112,0.3822619456858027,0.9832007073386384
 india,bihar,bihar,s1_form,22850,1.0,1.0
 india,br,bihar,code,2167,0.545020120724346,0.9904021937842779
@@ -20,7 +20,7 @@ india,kl,kerala,code,2679,0.39641905889316364,0.9922222222222222
 india,കേരളം,kerala,native,1867,0.2762651672092335,0.9894011658717541
 india,keralam,kerala,name,1832,0.27108612015389166,0.9924160346695557
 india,madhya pradesh,madhya pradesh,s1_form,22503,1.0,1.0
-india,mp,madhya pradesh,code,2138,0.553026383859286,0.9958081043316255
+india,mp,madhya pradesh,code,2119,0.5481117434040351,0.9957706766917294
 india,मध्य प्रदेश,madhya pradesh,native,1472,0.3807553026383859,0.9986431478968792
 india,maharashtra,maharashtra,s1_form,191679,1.0,1.0
 india,mh,maharashtra,code,18161,0.5526612093362953,0.9980765003297428
@@ -36,16 +36,16 @@ india,rajasthan,rajasthan,s1_form,32183,1.0,1.0
 india,rj,rajasthan,code,3042,0.5610475839173736,0.9944426283099052
 india,राजस्थान,rajasthan,native,2027,0.3738472888233124,0.9941147621383031
 india,tamil nadu,tamil nadu,s1_form,63290,1.0,1.0
-india,tn,tamil nadu,code,5971,0.5509319062557667,0.9981611501170177
+india,tn,tamil nadu,code,5971,0.5509319062557667,0.9979943172321578
 india,தமிழ்நாடு,tamil nadu,native,4171,0.3848496032478317,0.9971312455175712
 india,telangana,telangana,s1_form,55428,1.0,1.0
 india,tg,telangana,code,4149,0.3895774647887324,0.9866825208085612
 india,తెలంగాణ,telangana,native,2936,0.27568075117370894,0.9888851465139777
 india,uttar pradesh,uttar pradesh,s1_form,73631,1.0,1.0
-india,up,uttar pradesh,code,6960,0.5556442599393262,0.9813874788494078
+india,up,uttar pradesh,code,6943,0.5542870828676353,0.9812040700960994
 india,उत्तर प्रदेश,uttar pradesh,native,4740,0.3784129011655756,0.9777227722772277
 india,west bengal,west bengal,s1_form,56872,1.0,1.0
-india,wb,west bengal,code,5563,0.5570799118766273,0.9974896897973821
+india,wb,west bengal,code,5554,0.5561786501101542,0.9974856321839081
 india,পশ্চিমবঙ্গ,west bengal,native,3752,0.3757260164229922,0.9994672349493873
 us,ak,ak,s1_form,3680,1.0,1.0
 us,alaska,ak,name,333,0.8809523809523809,1.0

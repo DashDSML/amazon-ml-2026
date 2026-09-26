@@ -37,7 +37,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from data import load_ground_truth_pairs, scan_source  # noqa: E402
 from normalize import (  # noqa: E402
     ALL, ARTICLES, FRENCH_ADDR_EQUIV, FRENCH_LEGAL, FRENCH_NAME_EQUIV, FRENCH_STREET_TYPES,
-    INDIC_RE, ORDINAL_WORDS, RESOURCES_DIR, components_long, fold_expr, merge_letter_runs,
+    INDIC_RE, ORDINAL_WORDS, RESOURCES_DIR, components_long, fold_expr,
     name_prepare, strip_zeros_expr, tokens_long,
 )
 
@@ -94,7 +94,8 @@ def load_pairs() -> tuple[pl.DataFrame, pl.DataFrame]:
 def name_long(df: pl.DataFrame, col: str, rid: str) -> pl.DataFrame:
     """Base name tokens (no dictionaries): (rid, pos, tok)."""
     prep = name_prepare(df.select(pl.col(rid).alias("rid"), col), col)
-    long = merge_letter_runs(tokens_long(prep, "_main"))
+    # letters are already glued at the string level inside name_prepare's _main view
+    long = tokens_long(prep, "_main")
     return long.with_columns(tok=strip_zeros_expr(pl.col("tok"))).rename({"rid": rid})
 
 
@@ -157,6 +158,47 @@ def generalise(df: pl.DataFrame, countries: list[str], keys: list[str]) -> pl.Da
 # --------------------------------------------------------------------------
 # States and cities
 # --------------------------------------------------------------------------
+def snap_to_s1_form(tbl: pl.DataFrame, key_col: str, ckey_col: str = "ckey") -> pl.DataFrame:
+    """Force every ``key_col`` value to be one of that country's ``s1_form`` values.
+
+    A variant (code/native/name row) must point to a canonical spelling that is
+    itself a real S1 component (the ``kind == "s1_form"`` rows); anything else is a
+    mining artefact (e.g. a rare misspelled component that slipped through the
+    greedy pick). Rows that fail are snapped to their ckey's nearest s1_form by
+    edit distance, and it is a hard error if any ckey has no s1_form to snap to,
+    or if any value still fails the check afterwards.
+    """
+    from rapidfuzz import fuzz, process
+
+    forms = tbl.filter(pl.col("kind") == "s1_form").select(ckey_col, key_col).unique()
+    valid = {c: v[key_col].to_list() for c, v in forms.group_by(ckey_col)}
+
+    def is_bad(t: pl.DataFrame) -> pl.DataFrame:
+        return (t.filter(pl.col("kind") != "s1_form")
+                .join(forms.rename({key_col: "_valid"}), left_on=[ckey_col, key_col],
+                      right_on=[ckey_col, "_valid"], how="anti"))
+
+    bad = is_bad(tbl)
+    if bad.height > 0:
+        fixes = []
+        for c, k in bad.select(ckey_col, key_col).unique().iter_rows():
+            choices = valid.get(c) or []
+            if not choices:
+                raise ValueError(f"snap_to_s1_form: no s1_form rows for {ckey_col}={c!r} "
+                                  f"to snap {key_col}={k!r} to")
+            match, _score, _ = process.extractOne(k, choices, scorer=fuzz.ratio)
+            fixes.append((c, k, match))
+        log(f"snap_to_s1_form({key_col}): {len(fixes)} value(s) not an s1_form, snapped to nearest:", fixes)
+        fix_df = pl.DataFrame(fixes, schema=[ckey_col, key_col, "_fixed"], orient="row")
+        tbl = (tbl.join(fix_df, on=[ckey_col, key_col], how="left")
+               .with_columns(pl.coalesce("_fixed", key_col).alias(key_col)).drop("_fixed"))
+        still_bad = is_bad(tbl)
+        if still_bad.height > 0:
+            raise ValueError(f"snap_to_s1_form({key_col}): still not an s1_form after snapping: "
+                              f"{still_bad.select(ckey_col, key_col).unique().rows()}")
+    return tbl
+
+
 def mine_states(s1c: pl.DataFrame, pairs: pl.DataFrame, oc: pl.DataFrame, countries: list[str]):
     """Greedy set cover of S1 records by short digit-free components = the state list.
 
@@ -229,6 +271,7 @@ def mine_states(s1c: pl.DataFrame, pairs: pl.DataFrame, oc: pl.DataFrame, countr
         .select("ckey", "variant", "state_key", "kind", "count", "rate", "spec"),
     ]).sort("ckey", "state_key", "count", descending=[False, False, True])
     out = out.unique(["ckey", "variant"], keep="first", maintain_order=True)
+    out = snap_to_s1_form(out, "state_key")
     for c in countries:
         k = out.filter(pl.col("ckey") == c)
         log(f"state variants {c}: " + ", ".join(f"{kd}={n}" for kd, n in
@@ -349,9 +392,9 @@ def main() -> None:
 
     def addr_tokens(c: pl.DataFrame, key: str) -> pl.DataFrame:
         c = c.join(state_variants, on=["ckey", "comp"], how="anti")
+        # letters are already glued at the string level inside components_long's comp view
         t = (c.select(key, "cpos", "ckey", pl.col("comp").str.split(" ").alias("tok")).explode("tok", empty_as_null=True)
              .with_columns(pos=pl.int_range(pl.len()).over(key, "cpos").cast(pl.Int32)))
-        t = merge_letter_runs(t.rename({key: "rid"}), by=("cpos",)).rename({"rid": key})
         t = t.join(c.select(key, "cpos", "ckey").unique(), on=[key, "cpos"])
         return t.with_columns(tok=strip_zeros_expr(pl.col("tok")).replace(ORDINAL_WORDS))
 
@@ -455,15 +498,33 @@ def main() -> None:
                        ]).unique("token", keep="first", maintain_order=True)
     log("legal forms:", legal["token"].to_list())
 
-    # prefixes: leading tokens added on the other side (honorifics, "the")
+    # prefixes: leading tokens added on the other side (honorifics, "the").
+    # Position + first_share alone also catch real name tokens (e.g. "kim") that lead
+    # many distinct S1 names in their own right: require the token to essentially never
+    # be the genuine first token of an S1 name (s1_start_rate, over ALL train S1, not
+    # just this pair's own match -- a per-pid anti-join can't see that).
     first = (pb_c.filter(pl.col("pos") == 0).join(pa_c.select("pid", "tok").unique(), on=["pid", "tok"], how="anti")
              .group_by("tok").len("count"))
     first_tot = pb_c.group_by("tok").len("total")
+    s1_start = (s1c_tok.filter(pl.col("pos") == 0).group_by("tok")
+                .agg(pl.col("rid").n_unique().alias("s1_start_count")))
     prefixes = (first.join(first_tot, on="tok").with_columns(first_share=pl.col("count") / pl.col("total"))
+                .join(s1_start, on="tok", how="left")
+                .with_columns(s1_start_count=pl.col("s1_start_count").fill_null(0))
+                .with_columns(s1_start_rate=pl.col("s1_start_count") / s1.height)
                 .filter((pl.col("count") >= 0.002 * pairs.height) & (pl.col("first_share") >= 0.6)
+                        & (pl.col("s1_start_rate") < 0.001)
                         & ~pl.col("tok").is_in(legal["token"].to_list()))
                 .sort("count", descending=True))
-    log("name prefixes:", prefixes.rows())
+    log("name prefixes:", prefixes.select("tok", "count", "first_share", "s1_start_count", "s1_start_rate").rows())
+    rejected = (first.join(first_tot, on="tok").with_columns(first_share=pl.col("count") / pl.col("total"))
+                .join(s1_start, on="tok", how="left").with_columns(s1_start_count=pl.col("s1_start_count").fill_null(0))
+                .with_columns(s1_start_rate=pl.col("s1_start_count") / s1.height)
+                .filter((pl.col("count") >= 0.002 * pairs.height) & (pl.col("first_share") >= 0.6)
+                        & (pl.col("s1_start_rate") >= 0.001) & ~pl.col("tok").is_in(legal["token"].to_list()))
+                .sort("count", descending=True))
+    log("name prefix candidates rejected as real name tokens (s1_start_rate too high):",
+        rejected.select("tok", "count", "first_share", "s1_start_count", "s1_start_rate").rows())
 
     # native-script lexicon: positional alignment when token counts agree
     nat_pids = pb.group_by("pid").agg(pl.col("tok").str.contains(INDIC_RE).any().alias("nat")).filter("nat")
@@ -498,7 +559,8 @@ def main() -> None:
     markers.select(pl.col("tok").alias("token"), "count", "share").write_csv(out / "addr_markers.csv")
     name_equiv.write_csv(out / "name_equiv.csv")
     legal.write_csv(out / "legal_forms.csv")
-    prefixes.select(pl.col("tok").alias("token"), "count", "first_share").write_csv(out / "name_prefixes.csv")
+    prefixes.select(pl.col("tok").alias("token"), "count", "first_share", "s1_start_count", "s1_start_rate").write_csv(
+        out / "name_prefixes.csv")
     lex.write_csv(out / "indic_lexicon.csv")
     grams.with_columns(pl.col("logodds").round(4)).sort("gram").write_csv(out / "gibberish_trigrams.csv")
     (out / "gibberish_meta.json").write_text(json.dumps(gmeta, indent=2), encoding="utf-8")
