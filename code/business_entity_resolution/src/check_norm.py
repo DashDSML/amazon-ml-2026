@@ -16,7 +16,7 @@ import argparse
 import polars as pl
 
 from data import cache_path, source_path
-from evaluate import norm_path
+from cv_harness import norm_path
 
 EXPECTED_ROWS = {"train": (2_206_821, 5_034_616, 5_285_603), "test": (1_732_544, 4_887_273, 5_082_316)}
 KEY_COLS = [
