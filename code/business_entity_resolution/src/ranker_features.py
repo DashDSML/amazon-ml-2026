@@ -28,15 +28,16 @@ import cv_harness as ev
 from data import DATASET_DIR
 from features import KEY_COLS, compute_features
 
-OD = DATASET_DIR / "cache" / "blocking_v2_ranker" / "train"
 COLS = ["src", "qi", "s1", "score", "name_s", "addr_s", "rank"]
 
 
-def build(files_per_chunk: int = 4, limit_chunks: int | None = None) -> None:
+def build(split: str = "train", version: str = "v2", files_per_chunk: int = 4,
+          limit_chunks: int | None = None) -> None:
     t0 = time.perf_counter()
-    files = sorted((OD / "parts").glob("*.parquet"))
-    truth = ev.load_truth_idx().with_columns(pl.lit(True).alias("is_true"))
-    out_dir = OD / "features_parts"
+    od = DATASET_DIR / "cache" / "blocking_v2_ranker" / split
+    files = sorted((od / "parts").glob("*.parquet"))
+    truth = ev.load_truth_idx().with_columns(pl.lit(True).alias("is_true")) if split == "train" else None
+    out_dir = od / "features_parts"
     if out_dir.exists() and limit_chunks is None:
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -48,8 +49,9 @@ def build(files_per_chunk: int = 4, limit_chunks: int | None = None) -> None:
             break
         batch = files[i : i + files_per_chunk]
         cands = pl.concat([pl.read_parquet(f).select(COLS) for f in batch])
-        cands = cands.join(truth, on=KEY_COLS, how="left").with_columns(pl.col("is_true").fill_null(False))
-        out = compute_features(cands, "train")
+        if truth is not None:
+            cands = cands.join(truth, on=KEY_COLS, how="left").with_columns(pl.col("is_true").fill_null(False))
+        out = compute_features(cands, split, version)
         out.write_parquet(out_dir / f"chunk_{i:05d}.parquet")
         total_rows += out.height
         n_chunks += 1
@@ -60,13 +62,15 @@ def build(files_per_chunk: int = 4, limit_chunks: int | None = None) -> None:
             print(f"  chunk {n_chunks} ({done_files}/{len(files)} files): {out.height:,} rows "
                   f"({el / 60:.1f} min elapsed, ~{eta / 60:.0f} min left)", flush=True)
 
-    print(f"[ranker_features] {n_chunks} chunks, {total_rows:,} rows total -> "
+    print(f"[ranker_features] {split} {n_chunks} chunks, {total_rows:,} rows total -> "
           f"{out_dir.relative_to(DATASET_DIR.parent)} ({time.perf_counter() - t0:.0f}s)")
 
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
+    ap.add_argument("--split", choices=["train", "test"], default="train")
+    ap.add_argument("--version", choices=["v1", "v2"], default="v2")
     ap.add_argument("--files-per-chunk", type=int, default=4)
     ap.add_argument("--limit-chunks", type=int, default=None, help="quick check: process only this many chunks")
     args = ap.parse_args()
-    build(args.files_per_chunk, args.limit_chunks)
+    build(args.split, args.version, args.files_per_chunk, args.limit_chunks)

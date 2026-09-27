@@ -193,7 +193,7 @@ def write_tsv(df: pl.DataFrame, path: Path) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--method", choices=["rule", "model"], default="rule")
-    ap.add_argument("--version", choices=["v1", "v2"], default="v1")
+    ap.add_argument("--version", choices=["v1", "v2", "v2r"], default="v1")
     args = ap.parse_args()
 
     cands_test = load_candidates("test", args.version)

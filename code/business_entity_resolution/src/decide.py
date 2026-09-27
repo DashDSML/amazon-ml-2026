@@ -137,6 +137,6 @@ def main(smoke: int | None = None, version: str = "v1") -> None:
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", type=int, default=None, help="must match the sample used for model.py --smoke")
-    ap.add_argument("--version", choices=["v1", "v2"], default="v1")
+    ap.add_argument("--version", choices=["v1", "v2", "v2r"], default="v1")
     args = ap.parse_args()
     main(args.smoke, args.version)

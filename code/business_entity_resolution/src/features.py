@@ -317,7 +317,7 @@ def build_features(split: str, smoke: int | None = None, version: str = "v1") ->
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--split", choices=["train", "test"], required=True)
-    ap.add_argument("--version", choices=["v1", "v2"], default="v1")
+    ap.add_argument("--version", choices=["v1", "v2", "v2r"], default="v1")
     ap.add_argument("--smoke", type=int, default=None, help="train only: sample this many S1")
     args = ap.parse_args()
     assert not (args.smoke and args.split == "test"), "--smoke is train-only"

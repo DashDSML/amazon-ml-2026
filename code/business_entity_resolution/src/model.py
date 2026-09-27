@@ -127,7 +127,7 @@ def train(smoke: int | None = None, note: str = "", version: str = "v1") -> None
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--smoke", type=int, default=None, help="train only: sample this many S1 (via features.py)")
-    ap.add_argument("--version", choices=["v1", "v2"], default="v1")
+    ap.add_argument("--version", choices=["v1", "v2", "v2r"], default="v1")
     ap.add_argument("--note", default="")
     args = ap.parse_args()
     train(args.smoke, args.note, args.version)
