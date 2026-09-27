@@ -1,4 +1,4 @@
-# Status (2026-09-27, commit d0eabce)
+# Status (2026-09-27, commit 285e623)
 
 **Final submission is v2r (tuned), DONE and ready (not submitted -- that's your call):** T21 ranker-pruned candidates + a tuned LightGBM matcher (`min_data_in_leaf=100`, found via a 15-config hyperparameter sweep, `model_tune.py`). `output/matching_results.tsv` + `candidate_pairs.tsv` on EC2, re-validated PASS. CV F0.5 **0.9628 (v2) -> 0.9661 (v2r) -> 0.9669 (v2r tuned)**, blocking oracle ceiling 0.9925. Local backup: `output_v2r/`. Fallback still available: v2 (`lb-3`, CV 0.9628) in `output_v2_lb3/`.
 
