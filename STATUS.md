@@ -1,19 +1,13 @@
-# Status (2026-09-27, commit fcc3116)
+# Status (2026-09-27, commit ab546e0, work continuing autonomously per explicit instruction)
 
-Blocking v2 done and frozen at floor=0.5 alpha=0.95 m=3: fix A3 (rarity-weighted retrieval rank, PRE_CAP_V2=80), fix S1/S2 (key evidence added to stage-1 score), fix A1+B (composite P/N keys; P backed by a train-fit global name-token DF table, `dataset/cache/blocking_v2/name_token_df.parquet`). Fastloop (20k S1): oracle 0.9778->0.9898, recall 0.9671, cands/S1 5.81->6.01; grid picked (0.5,0.95,3) at oracle 0.9893 / 5.37 cands/S1 as the frozen point.
+**lb-3 candidate is DONE and ready** (not submitted -- that's your call): v2 blocking + LightGBM matcher, `output/matching_results.tsv` + `candidate_pairs.tsv` on the EC2 instance, validator PASS. t=0.65, CV F0.5=**0.9628** (up from v1's 0.9541), blocking oracle ceiling=0.9895. Public LB estimate (rough, from v1's -0.011 CV->LB gap): **~0.94-0.96**. A >0.987 target is not realistic tonight -- it would need ~99.7% of the oracle ceiling captured end-to-end on a set that includes an unseen country; see reasoning in conversation.
 
-`features.py`/`model.py`/`decide.py`/`make_submission.py` all take `--version {v1,v2}` (default v1), reading/writing `dataset/cache/blocking_{version}/`; v1 untouched (`lb-2` depends on it -- verified only against the v2 tree, using temporary fake data, all cleaned up). `decide.py`'s oracle ceiling is now computed live from the holdout's own candidates instead of a hardcoded v1 number.
+**EC2 mid-work incident (resolved):** SSH access was refused for a while (network-level, instance uptime never broke -- no data lost). During the blackout, two independent nohup watchers both fired and launched duplicate `ranker_data.py` processes racing on the same output files. Killed both, wiped the directory, restarted clean (single process, confirmed).
 
-Running overnight (not run by assistant): full blocking_v2 train+test at the frozen op point.
+**Two things tried and NOT adopted (real, validated, documented in git):**
+- `decide_entity.py` (T1/T2/T4/T5/T6 entity-centric decision + isotonic calibration): does not beat decide.py's simple record-centric rule (0.9543 vs 0.9541, worse on both singleton and non-singleton individually). Calibration came back as identity -- probabilities were already fine. Not a bug, just doesn't help here.
+- `loco_validate.py` (T24, France proxy): real full-scale result -- holding out India entirely drops F0.5 from 0.9541 to **0.9042** (realistic blind-threshold case); holding out US only drops to 0.9453. This is a genuine, structural generalization gap (barely closes even with the country's own optimal threshold), not a threshold-tuning problem -- more decision-layer work won't fix it. T19 (noise-augmentation on training records) is the documented next step if there's time; not attempted yet given the ranker was judged higher-value for remaining time.
 
-Morning, in order:
-```powershell
-python code\business_entity_resolution\src\features.py --split train --version v2
-python code\business_entity_resolution\src\features.py --split test --version v2
-python code\business_entity_resolution\src\model.py --version v2
-python code\business_entity_resolution\src\decide.py --version v2
-python code\business_entity_resolution\src\make_submission.py --version v2 --method model
-python utils\validate_submission.py --matching output\matching_results.tsv --candidate output\candidate_pairs.tsv --test-dir dataset\test
-```
+**In progress:** `ranker_data.py` on EC2 (wide SAVE_CAP=80 candidate pool for train, ~2-2.5h, single process confirmed healthy). Will build+validate the ranker once it lands, adopt only if it beats the current v2 blocking oracle (0.9893) on a real holdout check, and report/log regardless.
 
-Next: compare v2's real full-scale F0.5/cands-per-S1 against v1's `lb-2` (CV 0.9541, LB 0.943) before deciding on `lb-3`.
+**Known gaps, not addressed tonight:** README.md and Documentation_template.md are stale (pre-date blocking v2/matcher/ranker); need a pass before the final zip.
