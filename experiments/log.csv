@@ -16,3 +16,6 @@ date,git_hash,change,cv_scores,lb_score
 2026-09-27,ede486f,fastloop v2 v2 PRE_CAP_V2=50 check (floor=0.5 alpha=0.95 m=3),oracle_f05=0.9883;pair_recall=0.9628;cands_mean=5.3391;cands_p95=34.3333,
 2026-09-27,7acc306,v1 T7+T9 features test (discard if not adopted),best_iteration=480,
 2026-09-27,7acc306,decide.py version=v1 t=0.65,f05=0.9542;ceiling=0.9800,
+2026-09-27,ddb06b4,v1 +confusability (T8) feature test,best_iteration=672,
+2026-09-27,ddb06b4,decide.py version=v1 t=0.65,f05=0.9550;ceiling=0.9800,
+2026-09-27,ddb06b4,decide.py version=v1 t=0.65,f05=0.9550;ceiling=0.9800,

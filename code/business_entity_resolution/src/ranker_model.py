@@ -36,25 +36,48 @@ OD = DATASET_DIR / "cache" / "blocking_v2_ranker" / "train"
 NEG_RATIO = 5
 SEED = 42
 EVAL_N_S1 = 20_000
+FILES_PER_CHUNK = 8  # matches ranker_features.py's proven-safe chunked-file pattern
 
 
 def load_sampled() -> pl.DataFrame:
-    """Every positive row + a random NEG_RATIO:1 sample of negatives, with fold assigned."""
-    lf = pl.scan_parquet(OD / "features_parts" / "*.parquet")
-    pos = lf.filter(pl.col("is_true")).collect()
-    n_pos = pos.height
+    """Every positive row + a random NEG_RATIO:1 sample of negatives, with fold assigned.
+
+    Two passes over the part-files, both column-projected and chunked (never one
+    lf.collect() over the whole 781M-row pool -- that pattern hit 50GB+ RSS and was
+    guard-killed once already): pass 1 reads only the ``is_true`` column to get the
+    exact global positive/negative counts (cheap, projection pushdown keeps this to
+    one boolean column across 781M rows); pass 2 re-scans FILES_PER_CHUNK files at a
+    time and collects only the rows that survive (is_true OR the hash-sampled
+    negative keep-rate), so peak memory is bounded by one chunk, not the whole pool.
+    """
+    files = sorted((OD / "features_parts").glob("*.parquet"))
+
+    n_pos = 0
+    n_rows = 0
+    for i in range(0, len(files), FILES_PER_CHUNK):
+        batch = files[i : i + FILES_PER_CHUNK]
+        agg = (
+            pl.scan_parquet(batch)
+            .select(pl.col("is_true").sum().alias("pos"), pl.len().alias("n"))
+            .collect()
+        )
+        n_pos += int(agg["pos"][0])
+        n_rows += int(agg["n"][0])
+    n_neg_total = n_rows - n_pos
     n_neg_target = n_pos * NEG_RATIO
-    neg_total = lf.filter(~pl.col("is_true")).select(pl.len()).collect().item()
-    frac = min(1.0, n_neg_target / max(neg_total, 1))
-    print(f"[ranker_model] positives={n_pos:,}  negatives_total={neg_total:,}  sampling frac={frac:.5f}")
+    frac = min(1.0, n_neg_target / max(n_neg_total, 1))
+    print(f"[ranker_model] positives={n_pos:,}  negatives_total={n_neg_total:,}  sampling frac={frac:.5f}")
+
     row_hash = pl.concat_str([pl.col("src").cast(pl.String), pl.lit("|"), pl.col("qi").cast(pl.String),
                               pl.lit("|"), pl.col("s1").cast(pl.String)]).hash(seed=SEED)
-    neg = (
-        lf.filter(~pl.col("is_true"))
-        .filter((row_hash % 1_000_000) < int(frac * 1_000_000))
-        .collect()
-    )
-    df = pl.concat([pos, neg], how="vertical_relaxed")
+    keep_expr = pl.col("is_true") | ((row_hash % 1_000_000) < int(frac * 1_000_000))
+
+    parts = []
+    for i in range(0, len(files), FILES_PER_CHUNK):
+        batch = files[i : i + FILES_PER_CHUNK]
+        parts.append(pl.scan_parquet(batch).filter(keep_expr).collect())
+    df = pl.concat(parts, how="vertical_relaxed")
+    del parts
 
     folds = ev.fold_array()
     fold_col = pl.DataFrame({"s1": np.arange(len(folds), dtype=np.uint32), "fold": folds.astype(np.int8)})
@@ -93,8 +116,14 @@ def evaluate_on_wide_holdout(booster: lgb.Booster) -> None:
     rng = np.random.default_rng(SEED)
     eval_s1 = rng.choice(ho_s1, size=min(EVAL_N_S1, len(ho_s1)), replace=False)
 
-    lf = pl.scan_parquet(OD / "features_parts" / "*.parquet")
-    df = lf.filter(pl.col("s1").is_in(pl.Series(eval_s1))).collect()
+    files = sorted((OD / "features_parts").glob("*.parquet"))
+    eval_s1_set = pl.Series(eval_s1)
+    parts = []
+    for i in range(0, len(files), FILES_PER_CHUNK):
+        batch = files[i : i + FILES_PER_CHUNK]
+        parts.append(pl.scan_parquet(batch).filter(pl.col("s1").is_in(eval_s1_set)).collect())
+    df = pl.concat(parts, how="vertical_relaxed")
+    del parts
     print(f"[ranker_model] wide holdout sample: s1={len(eval_s1):,}  rows={df.height:,}")
 
     prob = booster.predict(df.select(FEATURE_COLS).to_numpy())

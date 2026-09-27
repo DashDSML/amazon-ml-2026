@@ -76,6 +76,10 @@ FEATURE_COLS = [
     # T9 transitive S2<->S3 evidence within this S1's own candidate list (G2-safe: never
     # adds an ID outside the existing candidate set, only compares candidates already in it)
     "trans_max_sim", "trans_agree_count",
+    # T8 S1 confusability (confusability.py): this S1's similarity to its nearest OTHER S1 --
+    # a label-free structural signal (every S1-S1 pair is a guaranteed non-match), independent
+    # of country/labels, so identical on train and test (G1-safe).
+    "confusability",
 ]
 
 
@@ -206,7 +210,14 @@ def _transitive_features(cands: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def compute_features(cands: pl.DataFrame, split: str) -> pl.DataFrame:
+def _confusability(split: str, version: str) -> pl.DataFrame:
+    path = out_dir(split, None, version) / "confusability.parquet"
+    return pl.read_parquet(path).select(
+        pl.col("s1"), pl.col("confusability").cast(pl.Float32)
+    )
+
+
+def compute_features(cands: pl.DataFrame, split: str, version: str = "v1") -> pl.DataFrame:
     """Shared core: given a candidate frame (src, qi, s1, score, rank, ..., optionally
     is_true), return it with every FEATURE_COLS column added, cast to Float32, and
     everything else dropped. Reused by build_features (candidates.parquet) and
@@ -240,6 +251,9 @@ def compute_features(cands: pl.DataFrame, split: str) -> pl.DataFrame:
     cands = pl.concat(parts, how="vertical_relaxed")
     cands = cands.join(_transitive_features(cands), on=["src", "qi", "s1"], how="left")
     cands = cands.join(_s1_side(split), on="s1", how="left")
+    cands = cands.join(_confusability(split, version), on="s1", how="left").with_columns(
+        pl.col("confusability").fill_null(0.0)
+    )
 
     cands = cands.with_columns(
         _inter_n=pl.col("name_tokens").list.set_intersection("name_tokens_s1").list.len(),
@@ -289,7 +303,7 @@ def build_features(split: str, smoke: int | None = None, version: str = "v1") ->
             truth.with_columns(pl.lit(True).alias("is_true")), on=KEY_COLS, how="left"
         ).with_columns(pl.col("is_true").fill_null(False))
 
-    cands = compute_features(cands, split)
+    cands = compute_features(cands, split, version)
 
     od = out_dir(split, smoke, version)
     od.mkdir(parents=True, exist_ok=True)
