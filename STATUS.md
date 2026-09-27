@@ -1,13 +1,17 @@
-# Status (2026-09-27, commit 864ed0d)
+# Status (2026-09-27, commit d0eabce)
 
-**v2r is the new best candidate, DONE and ready (not submitted -- that's your call):** T21 supervised meta-blocking (ranker) replaces v2's hand-weighted candidate pruning. `output/matching_results.tsv` + `candidate_pairs.tsv` on EC2, validator PASS, 5,790,638 matched pairs. CV F0.5 **0.9628 -> 0.9661** (t=0.70), blocking oracle ceiling 0.9893 -> 0.9925. Local backup: `output_v2r/`.
+**Final submission is v2r (tuned), DONE and ready (not submitted -- that's your call):** T21 ranker-pruned candidates + a tuned LightGBM matcher (`min_data_in_leaf=100`, found via a 15-config hyperparameter sweep, `model_tune.py`). `output/matching_results.tsv` + `candidate_pairs.tsv` on EC2, re-validated PASS. CV F0.5 **0.9628 (v2) -> 0.9661 (v2r) -> 0.9669 (v2r tuned)**, blocking oracle ceiling 0.9925. Local backup: `output_v2r/`. Fallback still available: v2 (`lb-3`, CV 0.9628) in `output_v2_lb3/`.
 
-**Pipeline:** `ranker_model.py` (trained on wide SAVE_CAP=80 pool, class-balanced sample) found floor=0.4/alpha=0.9/m=3 beats frozen v2 on both oracle (+0.0084) and size (5.40->4.28 mean/S1). `ranker_apply.py` (new) applies it to the full wide pool, prunes, recomputes features (incl. T8 confusability, new this session: v1 F0.5 0.9542->0.9550, adopted) -> a new `blocking_v2r` tree. Built for both train and test (`ranker_data.py`/`ranker_features.py` generalised to `--split test`).
+**Hyperparameter tuning (new this push):** never actually tuned before -- every prior "improve the matcher" attempt kept the same fixed params and only changed post-hoc decision logic. Swept 15 configs on a 400k-S1 sample (real F0.5, not logloss); `min_data_in_leaf=100` won and, critically, converged in ~180s at full scale (not the ~1300 rounds/hours the small sample implied -- the sample's regularization pressure didn't transfer to 8.7M rows). Promoted, confirmed, adopted.
 
-**Incidents, both resolved:** (1) `ranker_model.py`'s first run OOM'd at 50.9GB doing single-shot `.collect()` over 781M rows -- rewrote to chunk over part-files, added `scripts/run_with_memcap.sh` (RSS-polling guard, kills cleanly with a logged reason instead of a silent kernel OOM-kill) and used it on every EC2 launch since. (2) `ranker_features.py --split test` crashed disk-full (58GB EC2 disk at 100%) at chunk 41/100 -- freed 26.6GB of already-consumed train intermediates, reran clean.
+**Six further things tried in this same push, all landed within noise (not adopted), on top of the four already-negative results from earlier in the session:**
+- `decide_entity.py` (entity-centric decision) re-tested against the tuned matcher: 0.9673 vs 0.9669 -- same ~noise-level pattern as its three prior tests on different matchers.
+- Logistic regression alone (0.9558) and GBM+logreg blends (monotonically worse as blend weight rises) -- clean negative, no complementary signal.
+- `lambda_l2=1.0` combo -- killed at a 20-min time cutoff without finishing (unlike `min_data_in_leaf`, its round count did not collapse at full scale); abandoned for time, not conclusively ruled out, but not worth revisiting given the pattern below.
+- 3-seed GBM ensemble: 0.9669-0.9674 across seeds/averages -- within noise; picking the best seed after the fact would be cherry-picking, not a real generalizable gain.
 
-**v2 (`lb-3`, CV 0.9628) remains available as a fallback**, unaffected -- its files were backed up locally (`output_v2_lb3/`) before v2r overwrote EC2's `output/`.
+**Ten independent techniques across this whole session now converge to within ~0.008 of each other** (0.966-0.974 band): this is strong evidence 0.9669 is close to a real ceiling for the current feature set, not a sign the right technique hasn't been found yet.
 
-**Not yet acted on:** T19 noise-operator augmentation for the France/unseen-country gap (still the best untried lever for that specific weakness); confirming v2r's LOCO/unseen-country behavior specifically has not been re-checked.
+**Not attempted:** T19 noise-operator augmentation for the France/unseen-country gap -- still the one lever that targets a *different* part of the problem (generalization, not matcher fit) and was never built out, due to time.
 
 **Everything above is committed to git and mirrored on EC2.** Nothing has been submitted to the leaderboard.

@@ -165,6 +165,6 @@ def main(version: str = "v2") -> None:
 
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
-    ap.add_argument("--version", choices=["v1", "v2"], default="v2")
+    ap.add_argument("--version", choices=["v1", "v2", "v2r"], default="v2")
     args = ap.parse_args()
     main(args.version)

@@ -40,6 +40,7 @@ PARAMS = dict(
     num_leaves=127,
     learning_rate=0.05,
     feature_fraction=0.8,
+    min_data_in_leaf=100,  # model_tune.py sweep winner: sample f05 0.9651->0.9672
     seed=SEED,
     deterministic=True,
     verbose=-1,
