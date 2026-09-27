@@ -49,6 +49,9 @@ def load_features_with_country(split: str, smoke: int | None, version: str) -> p
     return feat.join(s1_country, on="s1", how="left")
 
 
+REFERENCE_T = 0.65  # the production-style default a mixed-country fit would pick; see decide.py
+
+
 def run_holdout(df: pl.DataFrame, held_out: str, s1_ids, q_ids, truth) -> dict:
     tr = df.filter(pl.col("country") != held_out)
     ho = df.filter(pl.col("country") == held_out)
@@ -66,14 +69,19 @@ def run_holdout(df: pl.DataFrame, held_out: str, s1_ids, q_ids, truth) -> dict:
     top1 = top1_per_record(ho, prob)
     universe = ho.select("s1").unique().join(s1_ids, on="s1")["entity_id"]
 
-    best_t, best_f = None, -1.0
+    # best_t/best_f: optimistic ceiling (threshold tuned ON the held-out country itself --
+    # not realistic, since France has no labels to tune on). blind_f: F0.5 at a *fixed*
+    # threshold never fit on this country -- the actually-realistic France scenario.
+    best_t, best_f, blind_f = None, -1.0, None
     for t in T_GRID:
         pred = predictions_at(top1, t, s1_ids, q_ids)
         f = official.macro_f05(truth, pred, universe)
+        if abs(t - REFERENCE_T) < 1e-9:
+            blind_f = f
         if f > best_f:
             best_f, best_t = f, t
     return {"held_out": held_out, "best_iteration": booster.best_iteration, "t": best_t, "f05": best_f,
-            "n_holdout_s1": int(universe.len())}
+            "blind_t": REFERENCE_T, "blind_f05": blind_f, "n_holdout_s1": int(universe.len())}
 
 
 def main(version: str = "v1", smoke: int | None = None) -> None:
@@ -86,20 +94,22 @@ def main(version: str = "v1", smoke: int | None = None) -> None:
     results = []
     for held_out in countries:
         res = run_holdout(df, held_out, s1_ids, q_ids, truth)
-        print(f"  -> held-out {held_out}: best t={res['t']:.2f}  f05={res['f05']:.4f} "
-              f"(n_s1={res['n_holdout_s1']:,}, best_iter={res['best_iteration']})")
+        print(f"  -> held-out {held_out}: best t={res['t']:.2f} f05={res['f05']:.4f} (ceiling, "
+              f"not realistic) | blind t={res['blind_t']:.2f} f05={res['blind_f05']:.4f} "
+              f"(realistic France scenario) (n_s1={res['n_holdout_s1']:,}, best_iter={res['best_iteration']})")
         results.append(res)
 
     print("\n[loco] summary (compare to each country's normal same-country CV number):")
     for res in results:
-        print(f"  {res['held_out']:<8} unseen-country f05={res['f05']:.4f}")
+        print(f"  {res['held_out']:<8} ceiling f05={res['f05']:.4f}  blind(realistic) f05={res['blind_f05']:.4f}")
 
     if not smoke:
         ev.log_experiment(
             f"loco_validate.py version={version} " + " ".join(
-                f"{r['held_out']}={r['f05']:.4f}" for r in results
+                f"{r['held_out']}_ceil={r['f05']:.4f}_blind={r['blind_f05']:.4f}" for r in results
             ),
-            {r["held_out"] + "_f05": r["f05"] for r in results},
+            {r["held_out"] + "_ceiling_f05": r["f05"] for r in results}
+            | {r["held_out"] + "_blind_f05": r["blind_f05"] for r in results},
         )
 
 

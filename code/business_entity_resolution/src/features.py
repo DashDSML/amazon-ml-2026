@@ -71,6 +71,11 @@ FEATURE_COLS = [
     "house_eq", "house_diff", "house_missing", "city_eq", "state_eq",
     "addr_num_jaccard", "addr_missing_either",
     "name_is_gibberish", "name_translit", "addr_translit", "name_script_nonlatin",
+    # T7 mutual (reverse) retrieval consistency -- free, derived from rank/rank_s1 already above
+    "is_mutual_top1", "reciprocal_rank_sum",
+    # T9 transitive S2<->S3 evidence within this S1's own candidate list (G2-safe: never
+    # adds an ID outside the existing candidate set, only compares candidates already in it)
+    "trans_max_sim", "trans_agree_count",
 ]
 
 
@@ -152,6 +157,55 @@ def _fuzzy_features(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
+MAX_TRANS_DEGREE = 200  # cap self-join size for very high-degree S1 (generic/common names)
+
+
+def _transitive_features(cands: pl.DataFrame) -> pl.DataFrame:
+    """T9: for each candidate, max name similarity to, and count of 'agreeing' (similarity
+    >= 0.7) OTHER candidates already in the same S1's own list -- G2-safe, this never adds
+    an ID outside the existing candidate set, only compares candidates already in it.
+    S1 groups over MAX_TRANS_DEGREE candidates are skipped (default 0/0) to bound the
+    self-join's worst case; a self-join is O(n^2) per group and an unbounded few very
+    high-degree S1 (generic/common business names) could otherwise dominate the cost."""
+    base = (
+        cands.select("src", "qi", "s1", "name_core", "n_cand_s1")
+        .filter(pl.col("n_cand_s1") <= MAX_TRANS_DEGREE)
+        .with_row_index("_i")
+    )
+    pair = base.join(base.drop("n_cand_s1"), on="s1", suffix="_o", how="inner").filter(
+        (pl.col("src") != pl.col("src_o")) | (pl.col("qi") != pl.col("qi_o"))
+    )
+    n = pair.height
+    default = cands.select("src", "qi", "s1").with_columns(
+        trans_max_sim=pl.lit(0.0, dtype=pl.Float32), trans_agree_count=pl.lit(0, dtype=pl.Int32)
+    )
+    if n == 0:
+        return default
+
+    sim = np.empty(n, np.float32)
+    a_list, b_list = pair["name_core"], pair["name_core_o"]
+    for a in range(0, n, CHUNK):
+        b = min(a + CHUNK, n)
+        sim[a:b] = cpdist(
+            a_list[a:b].to_list(), b_list[a:b].to_list(), scorer=fuzz.token_set_ratio, workers=-1, dtype=np.float32,
+        ) / 100.0
+    pair = pair.with_columns(pl.Series("_sim", sim))
+    agg = pair.group_by("_i").agg(
+        pl.col("_sim").max().alias("trans_max_sim"),
+        (pl.col("_sim") >= 0.7).sum().cast(pl.Int32).alias("trans_agree_count"),
+    )
+    out = base.join(agg, on="_i", how="left").select("src", "qi", "s1", "trans_max_sim", "trans_agree_count")
+    # bring back the (rare) skipped/no-co-candidate rows as 0/0
+    return (
+        default.join(out, on=["src", "qi", "s1"], how="left", suffix="_r")
+        .with_columns(
+            trans_max_sim=pl.coalesce("trans_max_sim_r", "trans_max_sim").fill_null(0.0),
+            trans_agree_count=pl.coalesce("trans_agree_count_r", "trans_agree_count").fill_null(0),
+        )
+        .select("src", "qi", "s1", "trans_max_sim", "trans_agree_count")
+    )
+
+
 def compute_features(cands: pl.DataFrame, split: str) -> pl.DataFrame:
     """Shared core: given a candidate frame (src, qi, s1, score, rank, ..., optionally
     is_true), return it with every FEATURE_COLS column added, cast to Float32, and
@@ -162,7 +216,14 @@ def compute_features(cands: pl.DataFrame, split: str) -> pl.DataFrame:
         n_cand_record=pl.len().over(["src", "qi"]),
         rank_s1=(pl.col("score").rank(method="ordinal", descending=True).over("s1") - 1).cast(pl.Int32),
         n_cand_s1=pl.len().over("s1"),
-    ).with_columns(gap_best=pl.col("best") - pl.col("score"))
+    ).with_columns(
+        gap_best=pl.col("best") - pl.col("score"),
+        # T7 mutual retrieval consistency: this record's own top pick agrees with being
+        # this S1's own top pick; reciprocal-rank sum rewards agreement even short of top1
+        is_mutual_top1=((pl.col("rank") == 0) & (pl.col("rank_s1") == 0)),
+        reciprocal_rank_sum=1.0 / (pl.col("rank").cast(pl.Float64) + 1.0)
+        + 1.0 / (pl.col("rank_s1").cast(pl.Float64) + 1.0),
+    )
 
     second = cands.filter(pl.col("rank") == 1).select("src", "qi", pl.col("score").alias("_second"))
     cands = (
@@ -177,6 +238,7 @@ def compute_features(cands: pl.DataFrame, split: str) -> pl.DataFrame:
         part = cands.filter(pl.col("src") == src).join(rec, on="qi", how="left")
         parts.append(part)
     cands = pl.concat(parts, how="vertical_relaxed")
+    cands = cands.join(_transitive_features(cands), on=["src", "qi", "s1"], how="left")
     cands = cands.join(_s1_side(split), on="s1", how="left")
 
     cands = cands.with_columns(
