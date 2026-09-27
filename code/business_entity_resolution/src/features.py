@@ -152,21 +152,11 @@ def _fuzzy_features(df: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def build_features(split: str, smoke: int | None = None, version: str = "v1") -> Path:
-    t0 = time.perf_counter()
-    cands = pl.read_parquet(out_dir(split, None, version) / "candidates.parquet")
-    if smoke:
-        rng = np.random.default_rng(SEED)
-        uniq_s1 = cands["s1"].unique().to_numpy()
-        pick = rng.choice(uniq_s1, size=min(smoke, len(uniq_s1)), replace=False)
-        cands = cands.filter(pl.col("s1").is_in(pl.Series(pick)))
-
-    if split == "train":
-        truth = ev.load_truth_idx()
-        cands = cands.join(
-            truth.with_columns(pl.lit(True).alias("is_true")), on=KEY_COLS, how="left"
-        ).with_columns(pl.col("is_true").fill_null(False))
-
+def compute_features(cands: pl.DataFrame, split: str) -> pl.DataFrame:
+    """Shared core: given a candidate frame (src, qi, s1, score, rank, ..., optionally
+    is_true), return it with every FEATURE_COLS column added, cast to Float32, and
+    everything else dropped. Reused by build_features (candidates.parquet) and
+    ranker_features.py (the wide SAVE_CAP~80 pool, same columns from a different source)."""
     cands = cands.with_columns(
         best=pl.col("score").max().over(["src", "qi"]),
         n_cand_record=pl.len().over(["src", "qi"]),
@@ -216,10 +206,28 @@ def build_features(split: str, smoke: int | None = None, version: str = "v1") ->
 
     cands = _fuzzy_features(cands)
 
-    out_cols = KEY_COLS + FEATURE_COLS + (["is_true"] if split == "train" else [])
-    cands = cands.with_columns(
+    out_cols = KEY_COLS + FEATURE_COLS + (["is_true"] if "is_true" in cands.columns else [])
+    return cands.with_columns(
         pl.col(c).cast(pl.Float32) for c in FEATURE_COLS if cands.schema[c] != pl.Float32
     ).select(out_cols)
+
+
+def build_features(split: str, smoke: int | None = None, version: str = "v1") -> Path:
+    t0 = time.perf_counter()
+    cands = pl.read_parquet(out_dir(split, None, version) / "candidates.parquet")
+    if smoke:
+        rng = np.random.default_rng(SEED)
+        uniq_s1 = cands["s1"].unique().to_numpy()
+        pick = rng.choice(uniq_s1, size=min(smoke, len(uniq_s1)), replace=False)
+        cands = cands.filter(pl.col("s1").is_in(pl.Series(pick)))
+
+    if split == "train":
+        truth = ev.load_truth_idx()
+        cands = cands.join(
+            truth.with_columns(pl.lit(True).alias("is_true")), on=KEY_COLS, how="left"
+        ).with_columns(pl.col("is_true").fill_null(False))
+
+    cands = compute_features(cands, split)
 
     od = out_dir(split, smoke, version)
     od.mkdir(parents=True, exist_ok=True)
