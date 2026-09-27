@@ -29,3 +29,4 @@ date,git_hash,change,cv_scores,lb_score
 2026-09-27,285e623,logreg+blend trial vs tuned gbm,logreg_alone=0.9558;blend_w0.1=0.9669;blend_w0.5=0.9652;NOT_ADOPTED,
 2026-09-27,285e623,3-seed gbm ensemble vs tuned gbm,seed123=0.9672;seed456=0.9674;avg3=0.9673;NOT_ADOPTED_noise,
 2026-09-27,285e623,make_submission.py version=v2r method=model test (tuned),matched_pairs=5790905;candidates=7585696;validator=PASS,
+2026-09-27,3232cc0,lb-3 submitted: v2r (T21 ranker + tuned matcher min_data_in_leaf=100) from output_v2r,cv_f05=0.9669,0.954
