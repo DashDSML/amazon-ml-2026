@@ -19,3 +19,6 @@ date,git_hash,change,cv_scores,lb_score
 2026-09-27,ddb06b4,v1 +confusability (T8) feature test,best_iteration=672,
 2026-09-27,ddb06b4,decide.py version=v1 t=0.65,f05=0.9550;ceiling=0.9800,
 2026-09-27,ddb06b4,decide.py version=v1 t=0.65,f05=0.9550;ceiling=0.9800,
+2026-09-27,864ed0d,v2r ranker-pruned candidates (T21) matcher retrain,best_iteration=169,
+2026-09-27,864ed0d,decide.py version=v2r t=0.70,f05=0.9661;ceiling=0.9925,
+2026-09-27,864ed0d,make_submission.py version=v2r method=model test,matched_pairs=5790638;candidates=7585696;validator=PASS,
